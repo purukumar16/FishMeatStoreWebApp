@@ -1,0 +1,6 @@
+{
+  "name": "Fish Meat Store",
+  "description": "Premium fresh raw fish, poultry, and tender meat retail with hyperlocal 4km store-to-door delivery.",
+  "requestFramePermissions": ["geolocation"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

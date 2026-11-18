@@ -1,0 +1,821 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Non-PII customer profile core stored under /users/{userId}.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Firebase Auth UID matching document ID."
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100,
+          "description": "Customer display name."
+        },
+        "walletBalance": {
+          "type": "number",
+          "description": "Meat Wallet credit balance in INR."
+        },
+        "loyaltyPoints": {
+          "type": "number",
+          "description": "Current redeemable loyalty points balance (1 pt = ₹1 discount at checkout)."
+        },
+        "totalLoyaltyEarned": {
+          "type": "number",
+          "description": "Cumulative loyalty points earned across purchases."
+        },
+        "totalLoyaltyRedeemed": {
+          "type": "number",
+          "description": "Cumulative loyalty points redeemed at checkout."
+        },
+        "memberSince": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 40,
+          "description": "Membership start month and year."
+        },
+        "preferredCut": {
+          "type": "string",
+          "maxLength": 120,
+          "description": "Default butchery cutting preference."
+        },
+        "savedOrdersCount": {
+          "type": "number",
+          "description": "Total completed order count."
+        },
+        "wishlistProductIds": {
+          "type": "array",
+          "description": "Bounded list of saved wishlist SKU IDs (max 100)."
+        },
+        "wishlistPreferences": {
+          "type": "object",
+          "description": "Map of saved wishlist weight and cutting preferences per SKU."
+        },
+        "pastOrderProductIds": {
+          "type": "array",
+          "description": "Bounded list of previously ordered SKU IDs (max 100)."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server update timestamp."
+        }
+      },
+      "required": [
+        "uid",
+        "name",
+        "walletBalance",
+        "memberSince",
+        "savedOrdersCount",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "UserPrivateInfo": {
+      "title": "UserPrivateInfo",
+      "description": "Strictly isolated PII contact and saved delivery addresses under /users/{userId}/private/{docId}.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Owner Firebase Auth UID."
+        },
+        "email": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 160,
+          "description": "Verified customer email address."
+        },
+        "phone": {
+          "type": "string",
+          "maxLength": 30,
+          "description": "Customer mobile number."
+        },
+        "savedAddresses": {
+          "type": "array",
+          "description": "Bounded list of saved delivery addresses (max 15)."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server update timestamp."
+        }
+      },
+      "required": [
+        "uid",
+        "email",
+        "phone",
+        "savedAddresses",
+        "updatedAt"
+      ]
+    },
+    "AdminMember": {
+      "title": "AdminMember",
+      "description": "Authorized Root Admin record under /admins/{userId}.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Admin Firebase Auth UID."
+        },
+        "email": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 160,
+          "description": "Verified Admin email."
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100,
+          "description": "Admin display name."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp."
+        }
+      },
+      "required": ["uid", "email", "name", "createdAt"]
+    },
+    "StaffMember": {
+      "title": "StaffMember",
+      "description": "Store Incharge / Operations staff record under /staffUsers/{userId}.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Staff Firebase Auth UID."
+        },
+        "email": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 160,
+          "description": "Staff email address."
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100,
+          "description": "Staff name."
+        },
+        "assignedStoreId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "description": "Assigned store identifier."
+        },
+        "status": {
+          "type": "string",
+          "enum": ["active", "suspended"],
+          "description": "Account status."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp."
+        }
+      },
+      "required": ["uid", "email", "name", "assignedStoreId", "status", "createdAt"]
+    },
+    "CustomerOrder": {
+      "title": "CustomerOrder",
+      "description": "Customer order persisted in /orders/{orderId}.",
+      "type": "object",
+      "properties": {
+        "orderId": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 40,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Order ID."
+        },
+        "customerUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Authenticated customer UID."
+        },
+        "storeId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "description": "Fulfillment store ID."
+        },
+        "storeName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120,
+          "description": "Fulfillment store name."
+        },
+        "contactName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100,
+          "description": "Recipient name."
+        },
+        "contactPhone": {
+          "type": "string",
+          "minLength": 5,
+          "maxLength": 30,
+          "description": "Mandatory recipient mobile number."
+        },
+        "deliveryAddress": {
+          "type": "string",
+          "minLength": 5,
+          "maxLength": 300,
+          "description": "Mandatory delivery address."
+        },
+        "subtotal": {
+          "type": "number",
+          "description": "Subtotal in INR."
+        },
+        "deliveryFee": {
+          "type": "number",
+          "description": "Delivery fee in INR."
+        },
+        "total": {
+          "type": "number",
+          "description": "Total payable in INR."
+        },
+        "paymentMethod": {
+          "type": "string",
+          "enum": ["cod", "upi", "card"],
+          "description": "Selected payment method."
+        },
+        "status": {
+          "type": "string",
+          "enum": ["confirmed", "allocated", "butchered_sealed", "out_for_delivery", "delivered", "cancelled"],
+          "description": "Order fulfillment status."
+        },
+        "temperatureLog": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80,
+          "description": "Cold-chain chiller reading."
+        },
+        "placedAt": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 40,
+          "description": "Display time placed."
+        },
+        "placedDate": {
+          "type": "string",
+          "minLength": 10,
+          "maxLength": 10,
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+          "description": "Local YYYY-MM-DD placed date."
+        },
+        "deliverySlotTitle": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100,
+          "description": "Delivery slot title."
+        },
+        "deliverySlotWindow": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100,
+          "description": "Delivery slot time window."
+        },
+        "items": {
+          "type": "array",
+          "description": "Bounded order line items list (max 50)."
+        },
+        "originalSubtotal": {
+          "type": "number",
+          "description": "Pre-weighing estimated subtotal in INR."
+        },
+        "loyaltyPointsEarned": {
+          "type": "number",
+          "description": "Loyalty points credited for this purchase."
+        },
+        "loyaltyPointsRedeemed": {
+          "type": "number",
+          "description": "Loyalty points redeemed at checkout for this order."
+        },
+        "loyaltyDiscountAmount": {
+          "type": "number",
+          "description": "Discount amount in INR applied from loyalty point redemption."
+        },
+        "originalTotal": {
+          "type": "number",
+          "description": "Pre-weighing estimated total in INR."
+        },
+        "weightUpdatedAt": {
+          "type": "string",
+          "maxLength": 40,
+          "description": "Time final item weights were recorded."
+        },
+        "weightUpdatedBy": {
+          "type": "string",
+          "maxLength": 100,
+          "description": "Staff or Admin name who updated final weights."
+        },
+        "acceptedAt": {
+          "type": "string",
+          "maxLength": 40,
+          "description": "Time accepted by store."
+        },
+        "acceptedBy": {
+          "type": "string",
+          "maxLength": 100,
+          "description": "Staff name who accepted order."
+        },
+        "cancelledAt": {
+          "type": "string",
+          "maxLength": 40,
+          "description": "Time cancelled."
+        },
+        "cancelledBy": {
+          "type": "string",
+          "maxLength": 100,
+          "description": "Actor who cancelled."
+        },
+        "cancellationReason": {
+          "type": "string",
+          "maxLength": 300,
+          "description": "Reason for cancellation."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server update timestamp."
+        }
+      },
+      "required": [
+        "orderId",
+        "customerUid",
+        "storeId",
+        "storeName",
+        "contactName",
+        "contactPhone",
+        "deliveryAddress",
+        "subtotal",
+        "deliveryFee",
+        "total",
+        "paymentMethod",
+        "status",
+        "temperatureLog",
+        "placedAt",
+        "placedDate",
+        "deliverySlotTitle",
+        "deliverySlotWindow",
+        "items",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "ProductSubscriptionRecord": {
+      "title": "ProductSubscriptionRecord",
+      "description": "Recurring Subscribe & Save schedule stored in /subscriptions/{subId}.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 64,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Subscription ID."
+        },
+        "customerUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Authenticated subscriber UID."
+        },
+        "productId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80,
+          "description": "Product SKU ID."
+        },
+        "productName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 140,
+          "description": "Product name."
+        },
+        "productImage": {
+          "type": "string",
+          "maxLength": 300,
+          "description": "Image URL or local asset path."
+        },
+        "category": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 60,
+          "description": "Main product category."
+        },
+        "selectedWeight": {
+          "type": "string",
+          "enum": ["250g", "500g", "750g", "1kg"],
+          "description": "Weight variant."
+        },
+        "cuttingStyle": {
+          "type": "string",
+          "maxLength": 100,
+          "description": "Cutting preference."
+        },
+        "customNotes": {
+          "type": "string",
+          "maxLength": 200,
+          "description": "Optional butchery note."
+        },
+        "frequency": {
+          "type": "string",
+          "enum": ["weekly", "bi-weekly", "twice-weekly"],
+          "description": "Delivery frequency."
+        },
+        "deliveryDay": {
+          "type": "string",
+          "enum": ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"],
+          "description": "Preferred delivery day."
+        },
+        "deliverySlot": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100,
+          "description": "Time window."
+        },
+        "discountPercent": {
+          "type": "number",
+          "description": "Subscriber discount percentage."
+        },
+        "originalPrice": {
+          "type": "number",
+          "description": "Standard price."
+        },
+        "discountedPrice": {
+          "type": "number",
+          "description": "Discounted recurring price."
+        },
+        "savingsPerDelivery": {
+          "type": "number",
+          "description": "Savings per delivery."
+        },
+        "status": {
+          "type": "string",
+          "enum": ["active", "paused"],
+          "description": "Subscription state."
+        },
+        "nextDeliveryDate": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120,
+          "description": "Next scheduled delivery label."
+        },
+        "deliveryAddress": {
+          "type": "string",
+          "minLength": 5,
+          "maxLength": 300,
+          "description": "Subscriber delivery address."
+        },
+        "customerName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100,
+          "description": "Subscriber display name."
+        },
+        "customerPhone": {
+          "type": "string",
+          "minLength": 5,
+          "maxLength": 30,
+          "description": "Subscriber mobile number."
+        },
+        "storeId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "description": "Assigned store ID."
+        },
+        "storeName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120,
+          "description": "Assigned store name."
+        },
+        "createdAtLabel": {
+          "type": "string",
+          "maxLength": 40,
+          "description": "Formatted date label."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server update timestamp."
+        }
+      },
+      "required": [
+        "id",
+        "customerUid",
+        "productId",
+        "productName",
+        "category",
+        "selectedWeight",
+        "frequency",
+        "deliveryDay",
+        "deliverySlot",
+        "discountPercent",
+        "originalPrice",
+        "discountedPrice",
+        "savingsPerDelivery",
+        "status",
+        "nextDeliveryDate",
+        "deliveryAddress",
+        "customerName",
+        "customerPhone",
+        "storeId",
+        "storeName",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "StoreFeatureConfig": {
+      "title": "StoreFeatureConfig",
+      "description": "Admin-controlled feature flags stored in /storeConfig/{configId}.",
+      "type": "object",
+      "properties": {
+        "enableOtherPayments": {
+          "type": "boolean",
+          "description": "Toggle UPI Instant and Card checkout options."
+        },
+        "sendWhatsAppOnOrderConfirmation": {
+          "type": "boolean",
+          "description": "Toggle opening Store WhatsApp after order confirmation on mobile."
+        },
+        "updatedBy": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "description": "UID of Admin who updated flags."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server update timestamp."
+        }
+      },
+      "required": [
+        "enableOtherPayments",
+        "sendWhatsAppOnOrderConfirmation",
+        "updatedBy",
+        "updatedAt"
+      ]
+    },
+    "CustomPriceOverride": {
+      "title": "CustomPriceOverride",
+      "description": "Real-time SKU price override stored in /customPrices/{productId}.",
+      "type": "object",
+      "properties": {
+        "productId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "SKU identifier."
+        },
+        "basePricePerKg": {
+          "type": "number",
+          "description": "Updated price per kg/pack."
+        },
+        "updatedBy": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "description": "UID of Admin/Staff who updated price."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server update timestamp."
+        }
+      },
+      "required": ["productId", "basePricePerKg", "updatedBy", "updatedAt"]
+    },
+    "GuestCustomer": {
+      "title": "GuestCustomer",
+      "description": "Saved guest customer profile keyed by 10-digit normalized mobile number under /guestCustomers/{guestId}.",
+      "type": "object",
+      "properties": {
+        "guestId": {
+          "type": "string",
+          "minLength": 10,
+          "maxLength": 10,
+          "pattern": "^[0-9]{10}$",
+          "description": "Normalized 10-digit mobile number matching document ID."
+        },
+        "phone": {
+          "type": "string",
+          "minLength": 5,
+          "maxLength": 30,
+          "description": "Display mobile number entered during checkout."
+        },
+        "phone10": {
+          "type": "string",
+          "minLength": 10,
+          "maxLength": 10,
+          "pattern": "^[0-9]{10}$",
+          "description": "Normalized 10-digit mobile number."
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100,
+          "description": "Customer name or auto-assigned sequential name Guest 1, Guest 2, ... Guest N."
+        },
+        "isAutoNamedGuest": {
+          "type": "boolean",
+          "description": "True when name was auto-assigned as Guest N."
+        },
+        "guestNumber": {
+          "type": "number",
+          "description": "Sequential guest index number."
+        },
+        "address": {
+          "type": "string",
+          "minLength": 5,
+          "maxLength": 300,
+          "description": "Latest delivery address."
+        },
+        "addresses": {
+          "type": "array",
+          "description": "Bounded list of delivery addresses used by the guest customer."
+        },
+        "storeId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "description": "Last store hub ID."
+        },
+        "storeName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120,
+          "description": "Last store hub name."
+        },
+        "orderIds": {
+          "type": "array",
+          "description": "Bounded list of order IDs placed with this mobile number."
+        },
+        "recentOrders": {
+          "type": "array",
+          "description": "Bounded serialized order snapshots for guest Mobile OTP order viewing and live tracking."
+        },
+        "ordersCount": {
+          "type": "number",
+          "description": "Total orders count placed by this guest mobile number."
+        },
+        "totalSpent": {
+          "type": "number",
+          "description": "Cumulative spend in INR."
+        },
+        "loyaltyPoints": {
+          "type": "number",
+          "description": "Current redeemable loyalty points balance for guest customer."
+        },
+        "totalLoyaltyEarned": {
+          "type": "number",
+          "description": "Cumulative loyalty points earned by guest customer."
+        },
+        "totalLoyaltyRedeemed": {
+          "type": "number",
+          "description": "Cumulative loyalty points redeemed by guest customer."
+        },
+        "lastOrderDate": {
+          "type": "string",
+          "minLength": 10,
+          "maxLength": 10,
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+          "description": "YYYY-MM-DD date of last order."
+        },
+        "lastOrderAt": {
+          "type": "string",
+          "maxLength": 40,
+          "description": "Display time of last order."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server update timestamp."
+        }
+      },
+      "required": [
+        "guestId",
+        "phone",
+        "phone10",
+        "name",
+        "isAutoNamedGuest",
+        "address",
+        "addresses",
+        "storeId",
+        "storeName",
+        "orderIds",
+        "recentOrders",
+        "ordersCount",
+        "totalSpent",
+        "lastOrderDate",
+        "lastOrderAt",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "GuestCounter": {
+      "title": "GuestCounter",
+      "description": "Sequential counter for Guest 1, Guest 2, ... Guest N naming stored in /guestCounters/{counterId}.",
+      "type": "object",
+      "properties": {
+        "count": {
+          "type": "number",
+          "description": "Current maximum guest sequence number."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server update timestamp."
+        }
+      },
+      "required": ["count", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "Public-safe customer profile core (no PII)."
+    },
+    "/users/{userId}/private/{docId}": {
+      "schema": { "$ref": "#/entities/UserPrivateInfo" },
+      "description": "Owner/Admin-only customer PII (email, phone, savedAddresses)."
+    },
+    "/admins/{userId}": {
+      "schema": { "$ref": "#/entities/AdminMember" },
+      "description": "Verified Root Admin directory."
+    },
+    "/staffUsers/{userId}": {
+      "schema": { "$ref": "#/entities/StaffMember" },
+      "description": "Verified Store Incharge directory."
+    },
+    "/orders/{orderId}": {
+      "schema": { "$ref": "#/entities/CustomerOrder" },
+      "description": "Customer orders scoped by customerUid or Admin/Staff."
+    },
+    "/subscriptions/{subId}": {
+      "schema": { "$ref": "#/entities/ProductSubscriptionRecord" },
+      "description": "Customer recurring subscriptions scoped by customerUid or Admin/Staff."
+    },
+    "/storeConfig/{configId}": {
+      "schema": { "$ref": "#/entities/StoreFeatureConfig" },
+      "description": "Global store feature flags manageable only by Admin."
+    },
+    "/customPrices/{productId}": {
+      "schema": { "$ref": "#/entities/CustomPriceOverride" },
+      "description": "Real-time catalog price overrides managed by Admin/Staff."
+    },
+    "/guestCustomers/{guestId}": {
+      "schema": { "$ref": "#/entities/GuestCustomer" },
+      "description": "Guest customer profiles keyed by normalized 10-digit mobile number for OTP lookup and Admin reports."
+    },
+    "/guestCounters/{counterId}": {
+      "schema": { "$ref": "#/entities/GuestCounter" },
+      "description": "Sequential guest numbering state."
+    }
+  }
+}
