@@ -35,7 +35,9 @@ import {
   ArrowRight,
   AlertTriangle,
 } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 import { useStore } from '../../context/StoreContext';
+import { canAccessAdminSection } from '../../config/rbac';
 import { OrderRecord, SavedAddress, WeightVariant } from '../../types';
 import { formatWeightGrams, getEffectiveItemLineTotal } from '../../utils/orderWeight';
 import {
@@ -145,6 +147,7 @@ export const CustomerProfileModal: React.FC<{
   isOpen?: boolean;
   onClose?: () => void;
 }> = ({ isOpen: propIsOpen, onClose: propOnClose }) => {
+  const navigate = useNavigate();
   const {
     isCustomerProfileOpen,
     setIsCustomerProfileOpen,
@@ -169,12 +172,9 @@ export const CustomerProfileModal: React.FC<{
     quickReorderAllWishlist,
     setSelectedProductForDetail,
     adminUser,
-    setIsAdminDashboardOpen,
-    openControlRoomReports,
+    userRole,
     profileDefaultTab,
     setProfileDefaultTab,
-    setIsAuthModalOpen,
-    setAuthInitialTab,
     cart,
     setIsCheckoutOpen,
   } = useStore();
@@ -537,18 +537,18 @@ export const CustomerProfileModal: React.FC<{
                     type="button"
                     onClick={() => {
                       handleClose();
-                      setIsAdminDashboardOpen(true);
+                      navigate('/admin/dashboard');
                     }}
                     className="text-emerald-300 hover:text-white underline font-semibold cursor-pointer"
                   >
                     Open Control Room
                   </button>
-                  {adminUser.role === 'Admin' && (
+                  {canAccessAdminSection(userRole, 'reports') && (
                     <button
                       type="button"
                       onClick={() => {
                         handleClose();
-                        openControlRoomReports();
+                        navigate('/admin/reports');
                       }}
                       className="text-amber-300 hover:text-white underline font-semibold cursor-pointer"
                     >
@@ -1714,7 +1714,7 @@ export const CustomerProfileModal: React.FC<{
                             <div className="space-y-0.5 pl-1">
                               {order.items.map((i, itemIdx) => {
                                 const lineTotal = getEffectiveItemLineTotal(i);
-                                const origLine = i.unitPrice * i.quantity;
+                                const origLine = Math.round(i.unitPrice * i.quantity);
                                 return (
                                   <div key={`${i.id}-${itemIdx}`} className="flex items-center justify-between gap-2">
                                     <span>
@@ -1725,10 +1725,10 @@ export const CustomerProfileModal: React.FC<{
                                         </strong>
                                       )}
                                     </span>
-                                    <span className="font-mono shrink-0">
+                                    <span className="font-mono shrink-0 font-semibold">
                                       ₹{lineTotal}
                                       {lineTotal !== origLine && (
-                                        <span className="ml-1 text-[10px] opacity-60 line-through">
+                                        <span className="ml-1 text-[10px] opacity-60 line-through font-normal">
                                           ₹{origLine}
                                         </span>
                                       )}
@@ -1764,7 +1764,9 @@ export const CustomerProfileModal: React.FC<{
                                     Est. ₹{order.originalTotal}
                                   </span>
                                 )}
-                              <span>₹{order.total}</span>
+                              <span className={order.weightUpdatedAt ? 'text-purple-950 font-bold' : ''}>
+                                {order.weightUpdatedAt ? `Updated Bill: ₹${order.total}` : `₹${order.total}`}
+                              </span>
                             </span>
                           </div>
                         </div>
@@ -2018,8 +2020,7 @@ export const CustomerProfileModal: React.FC<{
               type="button"
               onClick={() => {
                 handleClose();
-                setAuthInitialTab('customer');
-                setIsAuthModalOpen(true);
+                navigate('/login?switch=1');
               }}
               className="min-h-[44px] sm:min-h-0 text-xs text-purple-900 hover:text-purple-950 font-semibold underline cursor-pointer py-1 px-2"
             >

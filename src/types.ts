@@ -192,11 +192,14 @@ export interface WishlistItemPreference {
   savedAt?: string;
 }
 
+export type UserRole = 'customer' | 'admin' | 'store_incharge';
+
 export interface CustomerUser {
   id: string;
   name: string;
   email: string;
   phone: string;
+  role?: UserRole;
   customerType?: 'Customer' | 'Admin' | 'Store Admin' | 'Store Incharge' | 'Store Operations Manager' | string;
   password?: string;
   avatar?: string;
@@ -261,6 +264,7 @@ export interface AdminUser {
   name: string;
   workEmail: string;
   role: 'Admin' | 'Store Admin' | 'Store Incharge' | 'Store Operations Manager' | 'Cold-Chain QA Auditor' | 'Dispatch Lead';
+  appRole?: UserRole;
   assignedStoreId: string;
   assignedStoreName: string;
   securityClearance: 'Level 2' | 'Level 3 - Root Ops';

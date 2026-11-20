@@ -39,6 +39,7 @@ import {
   GuestCustomerRecord,
   StoreFeatureFlags,
 } from '../types';
+import { AppRole, normalizeAppRole } from '../config/rbac';
 import { PHYSICAL_STORES, DEMO_LOCATION_PRESETS, AddressPreset } from '../data/stores';
 import { findNearestStore } from '../utils/geo';
 import { DELIVERY_SLOTS } from '../data/slots';
@@ -78,6 +79,7 @@ import {
   getOrderLoyaltyEarned,
   getOrderLoyaltyRedeemed,
   LOYALTY_POINT_VALUE_INR,
+  WELCOME_FRESH_WALLET_CREDIT_INR,
   WELCOME_LOYALTY_POINTS,
 } from '../utils/loyalty';
 
@@ -164,7 +166,13 @@ interface StoreContextType {
   firebaseUser: FirebaseUser | null;
   isAuthReady: boolean;
   authLoading: boolean;
-  loginWithGoogle: (targetRole?: 'customer' | 'admin') => Promise<{ success: boolean; error?: string }>;
+  userRole: AppRole;
+  authNotice: { message: string; type: 'error' | 'info' } | null;
+  showAuthNotice: (message: string, type?: 'error' | 'info') => void;
+  dismissAuthNotice: () => void;
+  loginWithGoogle: (
+    targetRole?: 'customer' | 'admin'
+  ) => Promise<{ success: boolean; role?: AppRole; error?: string }>;
   currentUser: CustomerUser | null;
   adminUser: AdminUser | null;
   isAuthModalOpen: boolean;
@@ -183,8 +191,11 @@ interface StoreContextType {
     streetArea?: string;
     city?: string;
     pincode?: string;
-  }) => { success: boolean; error?: string };
-  loginWithEmailPassword: (email: string, password: string) => { success: boolean; error?: string };
+  }) => { success: boolean; role?: AppRole; error?: string };
+  loginWithEmailPassword: (
+    email: string,
+    password: string
+  ) => { success: boolean; role?: AppRole; error?: string };
   updateCustomerProfile: (updates: Partial<CustomerUser>) => void;
   addSavedAddress: (addr: Omit<SavedAddress, 'id'>) => void;
   updateSavedAddress: (id: string, updates: Partial<SavedAddress>) => void;
@@ -228,7 +239,10 @@ interface StoreContextType {
   createStoreIncharge: (inchargeData: Omit<StoreInchargeAccount, 'id' | 'createdAt'>) => StoreInchargeAccount;
   updateStoreIncharge: (id: string, updates: Partial<StoreInchargeAccount>) => void;
   deleteStoreIncharge: (id: string) => void;
-  authenticateStaff: (email: string, password: string) => { success: boolean; user?: AdminUser; error?: string };
+  authenticateStaff: (
+    email: string,
+    password: string
+  ) => { success: boolean; role?: AppRole; user?: AdminUser; error?: string };
 
   // Catalog & Live Price Overrides
   products: Product[];
@@ -246,7 +260,8 @@ interface StoreContextType {
   acceptOrder: (orderId: string) => void;
   updateOrderFinalWeights: (
     orderId: string,
-    finalWeightsByIndex: Record<number, number>
+    finalWeightsByIndex: Record<number, number>,
+    finalLineTotalsByIndex?: Record<number, number>
   ) => Promise<boolean>;
   cancelOrder: (orderId: string, reason: string) => void;
   requestedControlRoomNav: 'realtime_stock' | 'customer_orders' | 'reports' | null;
@@ -261,7 +276,7 @@ interface StoreContextType {
   setProfileDefaultTab: (
     tab: 'profile' | 'loyalty' | 'wishlist' | 'addresses' | 'orders' | 'subscriptions'
   ) => void;
-  loginCustomerWithOtp: (phone: string) => Promise<void>;
+  loginCustomerWithOtp: (phone: string) => Promise<{ role: AppRole }>;
 
   // Admin Feature Toggles & Services
   featureFlags: StoreFeatureFlags;
@@ -347,6 +362,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const firestoreOrderIdsRef = useRef<Set<string>>(new Set());
   const firestoreSubIdsRef = useRef<Set<string>>(new Set());
   const inFlightOrderSyncsRef = useRef<Map<string, Promise<boolean>>>(new Map());
+  const inFlightOrderStatusUpdatesRef = useRef<Map<string, Promise<void>>>(new Map());
   const isFlushingPendingOrdersRef = useRef(false);
   const [orderSyncState, setOrderSyncState] = useState<Record<string, 'syncing' | 'synced' | 'error'>>({});
   const [isSyncingCloudOrders, setIsSyncingCloudOrders] = useState(false);
@@ -666,8 +682,8 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         prev.map((g) => (g.phone10 === existingGuest.phone10 ? updatedGuest : g))
       );
       void persistGuestCustomerToFirestore(updatedGuest);
-    } else if (updatedOrder.customerUid === 'guest') {
-      // Guest record exists on another device or seeded order: update Firestore snapshot if doc exists
+    } else {
+      // Guest record exists on another device or store incharge session: update Firestore snapshot if doc exists
       void (async () => {
         try {
           const snap = await getDoc(doc(db, 'guestCustomers', phone10));
@@ -813,12 +829,23 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       firestoreOrderIdsRef.current.has(orderId)
     ) {
       const orderPath = `orders/${orderId}`;
-      void updateDoc(doc(db, 'orders', orderId), {
+      const statusPromise = updateDoc(doc(db, 'orders', orderId), {
         status,
         updatedAt: serverTimestamp(),
-      }).catch((err) => {
-        handleFirestoreError(err, OperationType.UPDATE, orderPath);
-      });
+      })
+        .catch((err) => {
+          try {
+            handleFirestoreError(err, OperationType.UPDATE, orderPath);
+          } catch {
+            // Structured error logged via handleFirestoreError
+          }
+        })
+        .finally(() => {
+          if (inFlightOrderStatusUpdatesRef.current.get(orderId) === statusPromise) {
+            inFlightOrderStatusUpdatesRef.current.delete(orderId);
+          }
+        });
+      inFlightOrderStatusUpdatesRef.current.set(orderId, statusPromise);
     }
   };
 
@@ -872,26 +899,40 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       firestoreOrderIdsRef.current.has(orderId)
     ) {
       const orderPath = `orders/${orderId}`;
-      void updateDoc(doc(db, 'orders', orderId), {
+      const acceptPromise = updateDoc(doc(db, 'orders', orderId), {
         status: 'allocated',
         acceptedAt: truncateStr(acceptedTime, 40),
         acceptedBy: acceptorName,
         updatedAt: serverTimestamp(),
-      }).catch((err) => {
-        handleFirestoreError(err, OperationType.UPDATE, orderPath);
-      });
+      })
+        .catch((err) => {
+          try {
+            handleFirestoreError(err, OperationType.UPDATE, orderPath);
+          } catch {
+            // Structured error logged via handleFirestoreError
+          }
+        })
+        .finally(() => {
+          if (inFlightOrderStatusUpdatesRef.current.get(orderId) === acceptPromise) {
+            inFlightOrderStatusUpdatesRef.current.delete(orderId);
+          }
+        });
+      inFlightOrderStatusUpdatesRef.current.set(orderId, acceptPromise);
     }
   };
 
   const updateOrderFinalWeights = async (
     orderId: string,
-    finalWeightsByIndex: Record<number, number>
+    finalWeightsByIndex: Record<number, number>,
+    finalLineTotalsByIndex?: Record<number, number>
   ): Promise<boolean> => {
     if (!isAuthorizedStaffForOrderUpdate()) {
       return false;
     }
 
-    const targetOrder = allOrders.find((o) => o.orderId === orderId);
+    const targetOrder =
+      allOrdersRef.current.find((o) => o.orderId === orderId) ||
+      allOrders.find((o) => o.orderId === orderId);
     if (!targetOrder) {
       return false;
     }
@@ -916,7 +957,8 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       targetOrder,
       finalWeightsByIndex,
       updatedBy,
-      updatedAt
+      updatedAt,
+      finalLineTotalsByIndex
     );
 
     const oldEarned = getOrderLoyaltyEarned(targetOrder);
@@ -930,11 +972,19 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     setActiveOrder((prev) => (prev && prev.orderId === orderId ? updatedOrder : prev));
     setRegisteredUsers((prev) =>
       prev.map((user) => {
-        const hasOrd = user.pastOrders?.some((o) => o.orderId === orderId) || user.id === targetOrder.customerUid;
+        const hasOrd =
+          user.pastOrders?.some((o) => o.orderId === orderId) ||
+          user.id === targetOrder.customerUid;
         return {
           ...user,
-          loyaltyPoints: hasOrd && earnedDelta !== 0 ? Math.max(0, (user.loyaltyPoints ?? 0) + earnedDelta) : user.loyaltyPoints,
-          totalLoyaltyEarned: hasOrd && earnedDelta !== 0 ? Math.max(0, (user.totalLoyaltyEarned ?? 0) + earnedDelta) : user.totalLoyaltyEarned,
+          loyaltyPoints:
+            hasOrd && earnedDelta !== 0
+              ? Math.max(0, (user.loyaltyPoints ?? 0) + earnedDelta)
+              : user.loyaltyPoints,
+          totalLoyaltyEarned:
+            hasOrd && earnedDelta !== 0
+              ? Math.max(0, (user.totalLoyaltyEarned ?? 0) + earnedDelta)
+              : user.totalLoyaltyEarned,
           pastOrders: user.pastOrders?.map(applyUpdate),
         };
       })
@@ -966,11 +1016,34 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       firebaseUser &&
       firebaseUser.emailVerified &&
       (firebaseRole === 'admin' || firebaseRole === 'staff') &&
-      firestoreOrderIdsRef.current.has(orderId)
+      isValidFirestoreId(orderId)
     ) {
-      const orderPath = `orders/${orderId}`;
-      try {
-        await updateDoc(doc(db, 'orders', orderId), {
+      // Wait for any in-flight accept/status transition on this order so Firestore rules see the latest status
+      const pendingStatus = inFlightOrderStatusUpdatesRef.current.get(orderId);
+      if (pendingStatus) {
+        try {
+          await pendingStatus;
+        } catch {
+          // Non-fatal
+        }
+      }
+
+      let existsInFirestore = firestoreOrderIdsRef.current.has(orderId);
+      if (!existsInFirestore) {
+        try {
+          const snap = await getDoc(doc(db, 'orders', orderId));
+          if (snap.exists()) {
+            firestoreOrderIdsRef.current.add(orderId);
+            existsInFirestore = true;
+          }
+        } catch {
+          existsInFirestore = false;
+        }
+      }
+
+      if (existsInFirestore) {
+        const orderPath = `orders/${orderId}`;
+        const updatePayload: Record<string, unknown> = {
           items: serializeOrderItemsForFirestore(updatedOrder.items),
           subtotal: Math.max(0, Math.min(500000, Number(updatedOrder.subtotal) || 0)),
           total: Math.max(0, Math.min(505000, Number(updatedOrder.total) || 0)),
@@ -983,10 +1056,28 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           weightUpdatedAt: updatedAt,
           weightUpdatedBy: updatedBy,
           updatedAt: serverTimestamp(),
-        });
-      } catch (err) {
-        handleFirestoreError(err, OperationType.UPDATE, orderPath);
-        return false;
+        };
+        if (typeof updatedOrder.loyaltyDiscountAmount === 'number') {
+          updatePayload.loyaltyDiscountAmount = Math.max(
+            0,
+            Math.min(500000, Math.round(updatedOrder.loyaltyDiscountAmount))
+          );
+        }
+
+        try {
+          await updateDoc(doc(db, 'orders', orderId), updatePayload);
+        } catch (err) {
+          try {
+            handleFirestoreError(err, OperationType.UPDATE, orderPath);
+          } catch {
+            // Structured error already logged via handleFirestoreError
+          }
+          // Return true only if error was not-found; surface failure if Firestore rejected a real cloud order
+          const errCode = (err as { code?: string } | null)?.code;
+          if (errCode !== 'not-found') {
+            return false;
+          }
+        }
       }
     }
 
@@ -1132,7 +1223,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         },
       ],
       savedOrdersCount: 4,
-      walletBalance: 250,
+      walletBalance: WELCOME_FRESH_WALLET_CREDIT_INR,
       loyaltyPoints: 185,
       totalLoyaltyEarned: 185,
       totalLoyaltyRedeemed: 0,
@@ -1166,10 +1257,19 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed) && parsed.length > 0) {
           return parsed.map((u: CustomerUser) => {
-            if (typeof u.loyaltyPoints === 'number') return u;
+            const nextWalletBalance =
+              typeof u.walletBalance !== 'number' || !Number.isFinite(u.walletBalance)
+                ? WELCOME_FRESH_WALLET_CREDIT_INR
+                : u.id === 'cust-demo-1' && u.walletBalance === 250
+                ? WELCOME_FRESH_WALLET_CREDIT_INR
+                : u.walletBalance;
+            if (typeof u.loyaltyPoints === 'number') {
+              return nextWalletBalance === u.walletBalance ? u : { ...u, walletBalance: nextWalletBalance };
+            }
             const defaultPts = u.id === 'cust-demo-1' ? 185 : WELCOME_LOYALTY_POINTS;
             return {
               ...u,
+              walletBalance: nextWalletBalance,
               loyaltyPoints: defaultPts,
               totalLoyaltyEarned: u.totalLoyaltyEarned ?? defaultPts,
               totalLoyaltyRedeemed: u.totalLoyaltyRedeemed ?? 0,
@@ -1222,6 +1322,13 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
                 cuttingStyle: 'Standard Medium Curry Cut',
               },
             };
+          }
+          if (
+            typeof parsed.walletBalance !== 'number' ||
+            !Number.isFinite(parsed.walletBalance) ||
+            (parsed.id === 'cust-demo-1' && parsed.walletBalance === 250)
+          ) {
+            parsed.walletBalance = WELCOME_FRESH_WALLET_CREDIT_INR;
           }
           if (typeof parsed.loyaltyPoints !== 'number') {
             const defaultPts = parsed.id === 'cust-demo-1' ? 185 : WELCOME_LOYALTY_POINTS;
@@ -1291,6 +1398,29 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   >('profile');
   const [authInitialTab, setAuthInitialTab] = useState<'customer' | 'admin'>('customer');
   const [isAdminDashboardOpen, setIsAdminDashboardOpen] = useState(false);
+  const [authNotice, setAuthNotice] = useState<{ message: string; type: 'error' | 'info' } | null>(
+    null
+  );
+
+  const showAuthNotice = (message: string, type: 'error' | 'info' = 'error') => {
+    setAuthNotice({ message, type });
+    setTimeout(() => {
+      setAuthNotice((prev) => (prev?.message === message ? null : prev));
+    }, 5500);
+  };
+
+  const dismissAuthNotice = () => setAuthNotice(null);
+
+  const userRole: AppRole = useMemo(() => {
+    if (adminUser) {
+      return adminUser.appRole || normalizeAppRole(adminUser.role);
+    }
+    if (firebaseRole === 'admin') return 'admin';
+    if (firebaseRole === 'staff') return 'store_incharge';
+    if (currentUser?.role) return currentUser.role;
+    if (currentUser?.customerType) return normalizeAppRole(currentUser.customerType);
+    return 'customer';
+  }, [adminUser, firebaseRole, currentUser]);
 
   // Wishlist UI & Pending-Login Action State
   const [isWishlistDrawerOpen, setIsWishlistDrawerOpen] = useState(false);
@@ -1347,7 +1477,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     return products.find((p) => p.id === pendingWishlistAction.productId) || null;
   }, [pendingWishlistAction, products]);
 
-  const loginCustomerWithOtp = async (phone: string): Promise<void> => {
+  const loginCustomerWithOtp = async (phone: string): Promise<{ role: AppRole }> => {
     try {
       localStorage.removeItem('fishmeatstore_logged_out');
     } catch {
@@ -1450,8 +1580,11 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
 
     if (existingRegistered) {
+      const existingRole: AppRole =
+        existingRegistered.role || normalizeAppRole(existingRegistered.customerType);
       const finalRegistered: CustomerUser = applyPendingWishlistToUser({
         ...existingRegistered,
+        role: existingRole,
         pastOrders: combinedOrders.length > 0 ? combinedOrders : existingRegistered.pastOrders,
         savedOrdersCount: Math.max(
           existingRegistered.savedOrdersCount || 0,
@@ -1467,7 +1600,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         setProfileDefaultTab('orders');
         setIsCustomerProfileOpen(true);
       }
-      return;
+      return { role: existingRole };
     }
 
     const resolvedName =
@@ -1552,7 +1685,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       addresses: savedAddresses.map((a) => a.formattedAddress),
       savedAddresses,
       savedOrdersCount: combinedOrders.length,
-      walletBalance: 250,
+      walletBalance: WELCOME_FRESH_WALLET_CREDIT_INR,
       loyaltyPoints: guestBalance,
       totalLoyaltyEarned: isGuestCustomer ? guestTotalEarned : WELCOME_LOYALTY_POINTS,
       totalLoyaltyRedeemed: isGuestCustomer ? guestTotalRedeemed : 0,
@@ -1564,7 +1697,10 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       pastOrders: combinedOrders,
     };
 
-    const finalUser = applyPendingWishlistToUser(otpCustomer);
+    const finalUser = applyPendingWishlistToUser({
+      ...otpCustomer,
+      role: 'customer',
+    });
     setCurrentUser(finalUser);
     if (!isGuestCustomer) {
       setRegisteredUsers((prev) => [...prev, finalUser]);
@@ -1574,6 +1710,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       setProfileDefaultTab('orders');
       setIsCustomerProfileOpen(true);
     }
+    return { role: 'customer' };
   };
 
   const loginCustomer = (phone: string, name = 'Rahul Sharma', email = 'rahul.s@example.com') => {
@@ -1650,7 +1787,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       addresses: [resolvedAddress],
       savedAddresses: [defaultAddr],
       savedOrdersCount: Math.max(1, matchingOrders.length),
-      walletBalance: 250,
+      walletBalance: WELCOME_FRESH_WALLET_CREDIT_INR,
       loyaltyPoints: initialLoyaltyPts,
       totalLoyaltyEarned:
         matchingGuest?.totalLoyaltyEarned ??
@@ -1678,7 +1815,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     streetArea?: string;
     city?: string;
     pincode?: string;
-  }): { success: boolean; error?: string } => {
+  }): { success: boolean; role?: AppRole; error?: string } => {
     const cleanEmail = data.email.trim().toLowerCase();
     if (!cleanEmail || !cleanEmail.includes('@')) {
       return { success: false, error: 'Please enter a valid email address.' };
@@ -1734,10 +1871,12 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       email: cleanEmail,
       password: data.password,
       phone: data.phone.trim(),
+      role: 'customer',
+      customerType: 'Customer',
       addresses: [initialAddress.formattedAddress],
       savedAddresses: [initialAddress],
       savedOrdersCount: 0,
-      walletBalance: 250, // ₹250 Welcome bonus credit!
+      walletBalance: WELCOME_FRESH_WALLET_CREDIT_INR, // ₹50 Welcome Fresh Wallet credit
       loyaltyPoints: WELCOME_LOYALTY_POINTS,
       totalLoyaltyEarned: WELCOME_LOYALTY_POINTS,
       totalLoyaltyRedeemed: 0,
@@ -1755,7 +1894,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     setRegisteredUsers((prev) => [...prev, finalUser]);
     setCurrentUser(finalUser);
     setIsAuthModalOpen(false);
-    return { success: true };
+    return { success: true, role: 'customer' };
   };
 
   const buildOrSyncStaffCustomer = (
@@ -1805,7 +1944,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       addresses: [staffAddr.formattedAddress],
       savedAddresses: [staffAddr],
       savedOrdersCount: 0,
-      walletBalance: 250,
+      walletBalance: WELCOME_FRESH_WALLET_CREDIT_INR,
       loyaltyPoints: WELCOME_LOYALTY_POINTS,
       totalLoyaltyEarned: WELCOME_LOYALTY_POINTS,
       totalLoyaltyRedeemed: 0,
@@ -1824,7 +1963,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const loginWithEmailPassword = (
     email: string,
     password: string
-  ): { success: boolean; error?: string } => {
+  ): { success: boolean; role?: AppRole; error?: string } => {
     const cleanEmail = email.trim().toLowerCase();
     let user = registeredUsers.find((u) => u.email.toLowerCase() === cleanEmail);
     let wasStaffCreated = false;
@@ -1846,13 +1985,14 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           name: DEFAULT_ADMIN_ACCOUNT.name,
           workEmail: DEFAULT_ADMIN_ACCOUNT.email,
           role: 'Admin',
+          appRole: 'admin',
           assignedStoreId: activeStore.id,
           assignedStoreName: activeStore.name,
           securityClearance: 'Level 3 - Root Ops',
           lastLoginAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
         };
         const synced = buildOrSyncStaffCustomer(staffAsAdmin, registeredUsers);
-        user = { ...synced.customer, password: DEFAULT_ADMIN_ACCOUNT.password };
+        user = { ...synced.customer, role: 'admin', password: DEFAULT_ADMIN_ACCOUNT.password };
         wasStaffCreated = true;
       } else {
         const matchedIncharge = storeIncharges.find(
@@ -1876,6 +2016,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
             name: matchedIncharge.name,
             workEmail: matchedIncharge.email,
             role: 'Store Incharge',
+            appRole: 'store_incharge',
             assignedStoreId: matchedIncharge.assignedStoreId,
             assignedStoreName: matchedIncharge.assignedStoreName,
             securityClearance: 'Level 2',
@@ -1883,7 +2024,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
             inchargeProfile: matchedIncharge,
           };
           const synced = buildOrSyncStaffCustomer(staffAsIncharge, registeredUsers);
-          user = { ...synced.customer, password: matchedIncharge.password };
+          user = { ...synced.customer, role: 'store_incharge', password: matchedIncharge.password };
           wasStaffCreated = true;
         }
       }
@@ -1909,7 +2050,11 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       // ignore storage errors
     }
 
-    const finalUser = applyPendingWishlistToUser(user);
+    const resolvedRole: AppRole = user.role || normalizeAppRole(user.customerType);
+    const finalUser = applyPendingWishlistToUser({
+      ...user,
+      role: resolvedRole,
+    });
     setCurrentUser(finalUser);
     if (wasStaffCreated) {
       setRegisteredUsers((prev) => {
@@ -1934,7 +2079,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
 
     setIsAuthModalOpen(false);
-    return { success: true };
+    return { success: true, role: resolvedRole };
   };
 
   const syncUserProfileUpdateToFirestore = (
@@ -2197,7 +2342,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const authenticateStaff = (
     email: string,
     pass: string
-  ): { success: boolean; user?: AdminUser; error?: string } => {
+  ): { success: boolean; role?: AppRole; user?: AdminUser; error?: string } => {
     const cleanEmail = email.trim().toLowerCase();
     const cleanPass = pass.trim();
 
@@ -2213,12 +2358,13 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           name: DEFAULT_ADMIN_ACCOUNT.name,
           workEmail: DEFAULT_ADMIN_ACCOUNT.email,
           role: 'Admin',
+          appRole: 'admin',
           assignedStoreId: activeStore.id,
           assignedStoreName: activeStore.name,
           securityClearance: 'Level 3 - Root Ops',
           lastLoginAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
         };
-        return { success: true, user: admin };
+        return { success: true, role: 'admin', user: admin };
       } else {
         return { success: false, error: 'Incorrect password for Corporate Admin account.' };
       }
@@ -2243,6 +2389,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           name: matchedIncharge.name,
           workEmail: matchedIncharge.email,
           role: 'Store Incharge',
+          appRole: 'store_incharge',
           assignedStoreId: matchedIncharge.assignedStoreId,
           assignedStoreName: matchedIncharge.assignedStoreName,
           securityClearance: 'Level 2',
@@ -2253,7 +2400,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         if (storeObj) {
           setActiveStore(storeObj);
         }
-        return { success: true, user: inchargeUser };
+        return { success: true, role: 'store_incharge', user: inchargeUser };
       } else {
         return { success: false, error: 'Incorrect password for Store Incharge account.' };
       }
@@ -2267,13 +2414,29 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           name: 'Vikram Malhotra',
           workEmail: cleanEmail,
           role: 'Store Operations Manager',
+          appRole: 'admin',
           assignedStoreId: activeStore.id,
           assignedStoreName: activeStore.name,
           securityClearance: 'Level 3 - Root Ops',
           lastLoginAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
         };
-        return { success: true, user: managerUser };
+        return { success: true, role: 'admin', user: managerUser };
       }
+    }
+
+    // 4. Detect non-admin registered customer attempting Admin login -> block & redirect to /dashboard
+    const matchedCustomer = registeredUsers.find(
+      (u) => u.email.toLowerCase() === cleanEmail && normalizeAppRole(u.role || u.customerType) === 'customer'
+    );
+    if (matchedCustomer) {
+      if (!matchedCustomer.password || matchedCustomer.password === cleanPass) {
+        setCurrentUser({ ...matchedCustomer, role: 'customer' });
+      }
+      return {
+        success: false,
+        role: 'customer',
+        error: 'Unauthorized: Customer accounts cannot access /admin routes. Redirecting to customer dashboard.',
+      };
     }
 
     return {
@@ -2284,7 +2447,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   const loginWithGoogle = async (
     targetRole: 'customer' | 'admin' = 'customer'
-  ): Promise<{ success: boolean; error?: string }> => {
+  ): Promise<{ success: boolean; role?: AppRole; error?: string }> => {
     setAuthLoading(true);
     pendingGoogleRoleRef.current = targetRole;
     try {
@@ -2296,37 +2459,51 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         return { success: false, error: 'Your Google account email must be verified.' };
       }
 
-      if (targetRole === 'admin') {
-        const emailLower = (cred.user.email || '').trim().toLowerCase();
-        const isBootAdmin = emailLower === BOOTSTRAPPED_ADMIN_EMAIL.toLowerCase();
-        const storeAdminCfg = getStoreAdminConfigForEmail(emailLower);
-        if (!isBootAdmin && !storeAdminCfg) {
-          let hasRole = false;
-          try {
-            const [admSnap, staffSnap] = await Promise.all([
-              getDoc(doc(db, 'admins', cred.user.uid)),
-              getDoc(doc(db, 'staffUsers', cred.user.uid)),
-            ]);
-            hasRole =
-              admSnap.exists() ||
-              (staffSnap.exists() && staffSnap.data()?.status === 'active');
-          } catch (err) {
-            handleFirestoreError(err, OperationType.GET, `admins/${cred.user.uid}`);
+      const uid = cred.user.uid;
+      const emailLower = (cred.user.email || '').trim().toLowerCase();
+      const isBootAdmin = emailLower === BOOTSTRAPPED_ADMIN_EMAIL.toLowerCase();
+      const storeAdminCfg = getStoreAdminConfigForEmail(emailLower);
+
+      let resolvedAppRole: AppRole = 'customer';
+      if (isBootAdmin) {
+        resolvedAppRole = 'admin';
+      } else {
+        try {
+          const [userSnap, admSnap, staffSnap] = await Promise.all([
+            getDoc(doc(db, 'users', uid)),
+            getDoc(doc(db, 'admins', uid)),
+            getDoc(doc(db, 'staffUsers', uid)),
+          ]);
+          const userDocRole = userSnap.exists()
+            ? normalizeAppRole(userSnap.data()?.role as string | undefined)
+            : 'customer';
+          if (admSnap.exists() || userDocRole === 'admin') {
+            resolvedAppRole = 'admin';
+          } else if (
+            storeAdminCfg ||
+            (staffSnap.exists() && staffSnap.data()?.status === 'active') ||
+            userDocRole === 'store_incharge'
+          ) {
+            resolvedAppRole = 'store_incharge';
           }
-          if (!hasRole) {
-            pendingGoogleRoleRef.current = null;
-            setAuthLoading(false);
-            return {
-              success: false,
-              error: `Google account ${cred.user.email} is signed in as a Customer, but is not enrolled in Admins, Store Admins, or Staff directory.`,
-            };
-          }
+        } catch (err) {
+          handleFirestoreError(err, OperationType.GET, `users/${uid}`);
         }
+      }
+
+      if (targetRole === 'admin' && resolvedAppRole === 'customer') {
+        pendingGoogleRoleRef.current = null;
+        setAuthLoading(false);
+        return {
+          success: false,
+          role: 'customer',
+          error: `Unauthorized: ${cred.user.email} has role "customer" in Firestore and cannot access /admin routes.`,
+        };
       }
 
       setIsAuthModalOpen(false);
       setAuthLoading(false);
-      return { success: true };
+      return { success: true, role: resolvedAppRole };
     } catch (err: unknown) {
       pendingGoogleRoleRef.current = null;
       setAuthLoading(false);
@@ -2352,10 +2529,12 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         const isBootAdmin = emailLower === BOOTSTRAPPED_ADMIN_EMAIL.toLowerCase();
         const storeAdminCfg = getStoreAdminConfigForEmail(emailLower);
 
-        // 1. Resolve Admin / Store Admin / Staff Role from trusted directories
+        // 1. Resolve Admin / Store Admin / Staff Role from trusted directories & /users/{uid}.role
         let resolvedRole: 'none' | 'admin' | 'staff' = 'none';
+        let resolvedAppRole: AppRole = 'customer';
         let staffAssignedStoreId = storeAdminCfg?.storeId || activeStore.id;
         let adminSnapExists = false;
+        let staffSnapExists = false;
         let staffSnapData: Record<string, unknown> | null = null;
 
         try {
@@ -2381,8 +2560,8 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
         if (isBootAdmin || adminSnapExists) {
           resolvedRole = 'admin';
+          resolvedAppRole = 'admin';
         } else {
-          let staffSnapExists = false;
           try {
             const staffSnap = await getDoc(doc(db, 'staffUsers', uid));
             if (staffSnap.exists()) {
@@ -2390,6 +2569,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
               staffSnapData = staffSnap.data() as Record<string, unknown>;
               if (staffSnapData.status === 'active') {
                 resolvedRole = 'staff';
+                resolvedAppRole = 'store_incharge';
                 if (typeof staffSnapData.assignedStoreId === 'string') {
                   staffAssignedStoreId = staffSnapData.assignedStoreId;
                 }
@@ -2401,6 +2581,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
           if (storeAdminCfg) {
             resolvedRole = 'staff';
+            resolvedAppRole = 'store_incharge';
             staffAssignedStoreId = storeAdminCfg.storeId;
             if (!staffSnapExists) {
               try {
@@ -2419,18 +2600,38 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           }
         }
 
-        setFirebaseRole(resolvedRole);
-
-        // 2. Ensure /users/{uid} (non-PII) exists BEFORE accessing /users/{uid}/private/info (Master Gate)
+        // 2. Ensure /users/{uid} (non-PII + RBAC role) exists BEFORE accessing /users/{uid}/private/info (Master Gate)
         let profileData: Record<string, unknown> | null = null;
         try {
           const userSnap = await getDoc(doc(db, 'users', uid));
           if (userSnap.exists()) {
             profileData = userSnap.data() as Record<string, unknown>;
+            const firestoreUserRole =
+              typeof profileData.role === 'string'
+                ? normalizeAppRole(profileData.role)
+                : null;
+            if (firestoreUserRole === 'admin') {
+              resolvedRole = 'admin';
+              resolvedAppRole = 'admin';
+            } else if (firestoreUserRole === 'store_incharge' && resolvedAppRole === 'customer') {
+              resolvedRole = 'staff';
+              resolvedAppRole = 'store_incharge';
+            } else if (!firestoreUserRole) {
+              try {
+                await updateDoc(doc(db, 'users', uid), {
+                  role: resolvedAppRole,
+                  updatedAt: serverTimestamp(),
+                });
+                profileData.role = resolvedAppRole;
+              } catch {
+                // Non-fatal role backfill if owner lacks role change permission
+              }
+            }
           } else {
             const initProfile = buildInitialUserProfilePayload(
               uid,
-              user.displayName || user.email?.split('@')[0] || 'Valued Customer'
+              user.displayName || user.email?.split('@')[0] || 'Valued Customer',
+              resolvedAppRole
             );
             await setDoc(doc(db, 'users', uid), initProfile);
             profileData = {
@@ -2441,6 +2642,8 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         } catch (err) {
           handleFirestoreError(err, OperationType.WRITE, `users/${uid}`);
         }
+
+        setFirebaseRole(resolvedRole);
 
         // 3. Ensure /users/{uid}/private/info exists (PII isolated)
         let privateData: Record<string, unknown> = {
@@ -2467,13 +2670,13 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           handleFirestoreError(err, OperationType.WRITE, `users/${uid}/private/info`);
         }
 
-        // 4. Hydrate React customer session
+        // 4. Hydrate React customer session with Firestore role
         const customerType: CustomerUser['customerType'] =
-          resolvedRole === 'admin'
+          resolvedAppRole === 'admin'
             ? 'Admin'
             : storeAdminCfg
             ? 'Store Admin'
-            : resolvedRole === 'staff'
+            : resolvedAppRole === 'store_incharge'
             ? 'Store Incharge'
             : 'Customer';
 
@@ -2481,7 +2684,8 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           uid,
           profileData || {},
           privateData,
-          customerType
+          customerType,
+          resolvedAppRole
         );
         const finalCustomer = applyPendingWishlistToUser(hydratedCustomer);
 
@@ -2511,30 +2715,34 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
             : [finalCustomer, ...prev];
         });
 
-        // 5. Activate Control Room session if Admin / Store Admin / Staff role verified
+        // 5. Activate Control Room session if Admin / Store Admin / Store Incharge role verified
         const requestedAdmin = pendingGoogleRoleRef.current === 'admin';
-        if (resolvedRole !== 'none' && (requestedAdmin || isBootAdmin || Boolean(storeAdminCfg))) {
+        if (
+          resolvedAppRole !== 'customer' &&
+          (requestedAdmin || isBootAdmin || Boolean(storeAdminCfg))
+        ) {
           const storeObj =
             PHYSICAL_STORES.find((s) => s.id === staffAssignedStoreId) || activeStore;
           const staffSession: AdminUser = {
             id: uid,
             name:
               user.displayName ||
-              (resolvedRole === 'admin'
+              (resolvedAppRole === 'admin'
                 ? 'Corporate Store Admin'
                 : storeAdminCfg
                 ? storeAdminCfg.defaultName
                 : 'Store Incharge'),
             workEmail: user.email || '',
             role:
-              resolvedRole === 'admin'
+              resolvedAppRole === 'admin'
                 ? 'Admin'
                 : storeAdminCfg
                 ? 'Store Admin'
                 : 'Store Incharge',
+            appRole: resolvedAppRole,
             assignedStoreId: storeObj.id,
             assignedStoreName: storeObj.name,
-            securityClearance: resolvedRole === 'admin' ? 'Level 3 - Root Ops' : 'Level 2',
+            securityClearance: resolvedAppRole === 'admin' ? 'Level 3 - Root Ops' : 'Level 2',
             lastLoginAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
           };
           setAdminUser(staffSession);
@@ -2867,6 +3075,87 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       if (unsubUsers) unsubUsers();
     };
   }, [isAuthReady, firebaseUser]);
+
+  // Live Firestore listener for Mobile OTP / Guest customers so staff weight & price updates reflect immediately
+  const activeCustomerPhone10 = normalizePhone10(currentUser?.phone || '');
+  useEffect(() => {
+    if (!isAuthReady || !currentUser || !isValidGuestPhone10(activeCustomerPhone10)) {
+      return;
+    }
+    if (firebaseUser && firebaseUser.emailVerified && !currentUser.isGuest) {
+      return;
+    }
+
+    const guestDocRef = doc(db, 'guestCustomers', activeCustomerPhone10);
+    const unsubGuestSelf = onSnapshot(
+      guestDocRef,
+      (snap) => {
+        if (!snap.exists()) return;
+        const remoteGuest = hydrateGuestCustomerFromFirestore(
+          snap.data() as Record<string, unknown>,
+          productsRef.current
+        );
+        if (!remoteGuest.recentOrders || remoteGuest.recentOrders.length === 0) return;
+
+        const remoteOrderMap = new Map(
+          remoteGuest.recentOrders.map((o) => [o.orderId, o])
+        );
+
+        setGuestCustomers((prev) => {
+          const exists = prev.some((g) => g.phone10 === remoteGuest.phone10);
+          return exists
+            ? prev.map((g) => (g.phone10 === remoteGuest.phone10 ? remoteGuest : g))
+            : [remoteGuest, ...prev];
+        });
+
+        setAllOrders((prev) => {
+          const existingIds = new Set(prev.map((o) => o.orderId));
+          const updated = prev.map((o) =>
+            remoteOrderMap.has(o.orderId) ? remoteOrderMap.get(o.orderId)! : o
+          );
+          const added = remoteGuest.recentOrders.filter((o) => !existingIds.has(o.orderId));
+          return [...added, ...updated];
+        });
+
+        setActiveOrder((prev) =>
+          prev && remoteOrderMap.has(prev.orderId) ? remoteOrderMap.get(prev.orderId)! : prev
+        );
+
+        setCurrentUser((prev) => {
+          if (!prev || normalizePhone10(prev.phone) !== activeCustomerPhone10) return prev;
+          const prevPast = prev.pastOrders || [];
+          const updatedPast = prevPast.map((o) =>
+            remoteOrderMap.has(o.orderId) ? remoteOrderMap.get(o.orderId)! : o
+          );
+          const existingIds = new Set(updatedPast.map((o) => o.orderId));
+          const addedOrders = remoteGuest.recentOrders.filter(
+            (o) => !existingIds.has(o.orderId)
+          );
+          return {
+            ...prev,
+            pastOrders: [...addedOrders, ...updatedPast],
+            loyaltyPoints:
+              typeof remoteGuest.loyaltyPoints === 'number'
+                ? remoteGuest.loyaltyPoints
+                : prev.loyaltyPoints,
+            totalLoyaltyEarned:
+              typeof remoteGuest.totalLoyaltyEarned === 'number'
+                ? remoteGuest.totalLoyaltyEarned
+                : prev.totalLoyaltyEarned,
+          };
+        });
+      },
+      (err) => {
+        try {
+          handleFirestoreError(err, OperationType.GET, `guestCustomers/${activeCustomerPhone10}`);
+        } catch {
+          // Structured error logged
+        }
+      }
+    );
+
+    return () => unsubGuestSelf();
+  }, [isAuthReady, firebaseUser, activeCustomerPhone10, currentUser?.isGuest]);
 
   const logoutCustomer = () => {
     setCurrentUser(null);
@@ -4102,6 +4391,10 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         firebaseUser,
         isAuthReady,
         authLoading,
+        userRole,
+        authNotice,
+        showAuthNotice,
+        dismissAuthNotice,
         loginWithGoogle,
         currentUser,
         adminUser,

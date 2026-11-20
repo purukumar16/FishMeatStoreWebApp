@@ -49,6 +49,9 @@ export const ProductDetailModal: React.FC = () => {
   const [boughtAgain, setBoughtAgain] = useState(false);
   const [showTooltip, setShowTooltip] = useState(false);
 
+  const [nutritionBasis, setNutritionBasis] = useState<'per100g' | 'perPack'>('per100g');
+  const [isNutritionAccordionOpen, setIsNutritionAccordionOpen] = useState(false);
+
   useEffect(() => {
     if (product) {
       if (product.availableWeights && !product.availableWeights.includes(rawSelectedWeight)) {
@@ -57,11 +60,9 @@ export const ProductDetailModal: React.FC = () => {
       setCuttingStyle(
         product.category === 'EGGS' ? 'Cushioned Pulp Carton' : 'Standard Medium Curry Cut'
       );
+      setIsNutritionAccordionOpen(false);
     }
   }, [product]);
-
-  const [nutritionBasis, setNutritionBasis] = useState<'per100g' | 'perPack'>('per100g');
-  const [isNutritionAccordionOpen, setIsNutritionAccordionOpen] = useState(true);
 
   const [purchaseMode, setPurchaseMode] = useState<'one-time' | 'subscribe'>('one-time');
   const [subFrequency, setSubFrequency] = useState<SubscriptionFrequency>('weekly');

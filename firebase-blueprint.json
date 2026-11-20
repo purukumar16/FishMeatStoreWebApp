@@ -18,6 +18,11 @@
           "maxLength": 100,
           "description": "Customer display name."
         },
+        "role": {
+          "type": "string",
+          "enum": ["customer", "admin", "store_incharge"],
+          "description": "RBAC role stored in Firestore users collection ('customer', 'admin', or 'store_incharge')."
+        },
         "walletBalance": {
           "type": "number",
           "description": "Meat Wallet credit balance in INR."

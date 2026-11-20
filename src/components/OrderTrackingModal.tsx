@@ -384,12 +384,12 @@ export const OrderTrackingModal: React.FC = () => {
                       ₹{liveOrder.originalTotal}
                     </span>
                   )}
-                <span>Total: ₹{liveOrder.total}</span>
+                <span>{liveOrder.weightUpdatedAt ? `Updated Total: ₹${liveOrder.total}` : `Total: ₹${liveOrder.total}`}</span>
               </span>
             </div>
             <div className="divide-y divide-stone-200">
               {liveOrder.items.map((item) => {
-                const originalLineTotal = item.unitPrice * item.quantity;
+                const originalLineTotal = Math.round(item.unitPrice * item.quantity);
                 const effectiveLineTotal = getEffectiveItemLineTotal(item);
                 const hasFinalWeight = typeof item.finalWeightGrams === 'number';
                 return (

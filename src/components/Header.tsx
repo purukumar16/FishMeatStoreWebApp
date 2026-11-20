@@ -12,10 +12,13 @@ import {
   Menu,
   X,
 } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 import { useStore } from '../context/StoreContext';
+import { ROLE_PERMISSIONS } from '../config/rbac';
 import { MainCategory } from '../types';
 
 export const Header: React.FC = () => {
+  const navigate = useNavigate();
   const {
     userLocation,
     activeStore,
@@ -27,15 +30,19 @@ export const Header: React.FC = () => {
     setSelectedSubcategory,
     currentUser,
     adminUser,
+    userRole,
     logoutAdmin,
     setIsAuthModalOpen,
     setAuthInitialTab,
-    setIsAdminDashboardOpen,
     setIsCustomerProfileOpen,
     searchQuery,
     setSearchQuery,
     products,
   } = useStore();
+
+  const canAccessControlRoom = Boolean(
+    adminUser && ROLE_PERMISSIONS[userRole].canAccessAdminPortal
+  );
 
   const headerRef = useRef<HTMLElement>(null);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
@@ -76,24 +83,17 @@ export const Header: React.FC = () => {
 
   const openCustomerLogin = () => {
     setIsMobileMenuOpen(false);
+    setIsAuthModalOpen(false);
     setAuthInitialTab('customer');
-    setIsAuthModalOpen(true);
+    navigate('/login');
   };
 
   const handleControlRoomClick = () => {
     setIsMobileMenuOpen(false);
-    if (
-      adminUser &&
-      (adminUser.role === 'Admin' ||
-        adminUser.role === 'Store Admin' ||
-        adminUser.role === 'Store Incharge' ||
-        adminUser.role === 'Store Operations Manager')
-    ) {
-      setIsAdminDashboardOpen(true);
+    if (canAccessControlRoom) {
+      navigate('/admin/dashboard');
     } else {
-      // Only admin, store admin, and store incharge can view! Prompt for credentials
-      setAuthInitialTab('admin');
-      setIsAuthModalOpen(true);
+      navigate('/admin/login');
     }
   };
 
@@ -135,7 +135,7 @@ export const Header: React.FC = () => {
           </div>
           <div className="flex items-center gap-2 sm:gap-3 shrink-0">
             <span className="text-purple-300 font-medium hidden md:inline">Strict 4km Hyperlocal Radius</span>
-            {adminUser && (
+            {canAccessControlRoom && adminUser && (
               <>
                 <span aria-hidden="true" className="text-purple-700 hidden md:inline">·</span>
                 <div className="flex items-center gap-1.5 text-[11px] sm:text-xs">
@@ -147,12 +147,7 @@ export const Header: React.FC = () => {
                   >
                     <ShieldCheck className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
                     <span className="truncate max-w-[140px] sm:max-w-none">
-                      {adminUser.role === 'Admin'
-                        ? 'Admin'
-                        : adminUser.role === 'Store Admin'
-                        ? 'Store Admin'
-                        : 'Incharge'}
-                      : {adminUser.name.split(' ')[0]}
+                      {userRole === 'admin' ? 'Admin' : 'Incharge'}: {adminUser.name.split(' ')[0]}
                     </span>
                   </button>
                   <button
@@ -232,29 +227,21 @@ export const Header: React.FC = () => {
 
         {/* Zone 3: Primary Actions (Control Room + Location + Customer Auth + Cart drawer) */}
         <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
-          {/* Desktop Control Room Button */}
-          <button
-            type="button"
-            onClick={handleControlRoomClick}
-            className="hidden lg:inline-flex items-center justify-center gap-1.5 h-[38px] px-2.5 xl:px-3 rounded-lg bg-[#18082e] hover:bg-purple-950 text-emerald-300 hover:text-white transition-colors whitespace-nowrap shrink-0 cursor-pointer text-[11px] xl:text-xs font-semibold shadow-xs border border-purple-700/80"
-            title={
-              adminUser
-                ? `Open Control Room (${adminUser.role})`
-                : 'Store Control Room (Admin & Store Incharge Access Only)'
-            }
-          >
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse shrink-0" />
-            <span>Control Room</span>
-            {adminUser && (
+          {/* Desktop Control Room Button (Visible ONLY for Admin & Store Incharge login) */}
+          {canAccessControlRoom && adminUser && (
+            <button
+              type="button"
+              onClick={handleControlRoomClick}
+              className="hidden lg:inline-flex items-center justify-center gap-1.5 h-[38px] px-2.5 xl:px-3 rounded-lg bg-[#18082e] hover:bg-purple-950 text-emerald-300 hover:text-white transition-colors whitespace-nowrap shrink-0 cursor-pointer text-[11px] xl:text-xs font-semibold shadow-xs border border-purple-700/80"
+              title={`Open Control Room (${adminUser.role})`}
+            >
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse shrink-0" />
+              <span>Control Room</span>
               <span className="hidden xl:inline-block text-[10px] bg-emerald-950 text-emerald-300 px-1.5 py-0.2 rounded border border-emerald-600/50 font-mono">
-                {adminUser.role === 'Admin'
-                  ? 'Admin'
-                  : adminUser.role === 'Store Admin'
-                  ? 'Store Admin'
-                  : 'Incharge'}
+                {userRole === 'admin' ? 'Admin' : 'Incharge'}
               </span>
-            )}
-          </button>
+            </button>
+          )}
 
           {/* Location icon-only button */}
           <button
@@ -276,7 +263,7 @@ export const Header: React.FC = () => {
               title={
                 currentUser.customerType && currentUser.customerType !== 'Customer'
                   ? `Signed in as ${currentUser.customerType} (Customer Mode) — view Wallet, Wishlist & Orders`
-                  : 'Click to view Meat Wallet, Wishlist & account details'
+                  : 'Click to view Fresh Wallet, Wishlist & account details'
               }
             >
               <div className="w-5 h-5 rounded-full bg-purple-900 text-emerald-300 flex items-center justify-center font-bold text-[10px] shrink-0">
@@ -390,23 +377,19 @@ export const Header: React.FC = () => {
               <MapPin className="w-4 h-4 text-emerald-700" />
               <span>Stores & Coverage ({activeStore.name})</span>
             </button>
-            <button
-              type="button"
-              onClick={handleControlRoomClick}
-              className="flex-1 flex items-center justify-center gap-2 px-3.5 min-h-[44px] rounded-xl bg-[#18082e] hover:bg-purple-950 text-emerald-300 text-xs font-bold border border-purple-700/80 cursor-pointer"
-            >
-              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-              <span>Control Room (Store)</span>
-              {adminUser && (
+            {canAccessControlRoom && adminUser && (
+              <button
+                type="button"
+                onClick={handleControlRoomClick}
+                className="flex-1 flex items-center justify-center gap-2 px-3.5 min-h-[44px] rounded-xl bg-[#18082e] hover:bg-purple-950 text-emerald-300 text-xs font-bold border border-purple-700/80 cursor-pointer"
+              >
+                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                <span>Control Room (Store)</span>
                 <span className="text-[10px] bg-emerald-950 text-emerald-300 px-1.5 py-0.5 rounded border border-emerald-600/50 font-mono">
-                  {adminUser.role === 'Admin'
-                    ? 'Admin'
-                    : adminUser.role === 'Store Admin'
-                    ? 'Store Admin'
-                    : 'Incharge'}
+                  {userRole === 'admin' ? 'Admin' : 'Incharge'}
                 </span>
-              )}
-            </button>
+              </button>
+            )}
           </div>
         </div>
       )}

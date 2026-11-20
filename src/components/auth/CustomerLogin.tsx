@@ -20,6 +20,8 @@ import {
   Heart,
 } from 'lucide-react';
 import { useStore } from '../../context/StoreContext';
+import { AppRole } from '../../config/rbac';
+import { WELCOME_FRESH_WALLET_CREDIT_INR } from '../../utils/loyalty';
 import heroImage from '../../assets/images/hero_fresh_meat_store_1794116943066.jpg';
 
 interface CountryCode {
@@ -41,7 +43,8 @@ const COUNTRY_CODES: CountryCode[] = [
 export const CustomerLogin: React.FC<{
   onSwitchToAdmin: () => void;
   onClose: () => void;
-}> = ({ onSwitchToAdmin, onClose }) => {
+  onSuccess?: (role: AppRole) => void;
+}> = ({ onSwitchToAdmin, onClose, onSuccess }) => {
   const {
     loginWithGoogle,
     firebaseUser,
@@ -65,6 +68,7 @@ export const CustomerLogin: React.FC<{
     if (!res.success && res.error) {
       setGoogleError(res.error);
     } else if (res.success) {
+      if (onSuccess) onSuccess(res.role || 'customer');
       onClose();
     }
   };
@@ -144,6 +148,7 @@ export const CustomerLogin: React.FC<{
       if (!res.success) {
         setSignInError(res.error || 'Failed to sign in. Please verify your credentials.');
       } else {
+        if (onSuccess) onSuccess(res.role || 'customer');
         onClose();
       }
     }, 450);
@@ -159,6 +164,7 @@ export const CustomerLogin: React.FC<{
       setIsSignInLoading(false);
       const res = loginWithEmailPassword('rahul.sharma@example.com', 'Password123!');
       if (res.success) {
+        if (onSuccess) onSuccess(res.role || 'customer');
         onClose();
       }
     }, 400);
@@ -207,6 +213,7 @@ export const CustomerLogin: React.FC<{
       if (!res.success) {
         setRegError(res.error || 'Registration failed. Please try again.');
       } else {
+        if (onSuccess) onSuccess(res.role || 'customer');
         onClose();
       }
     }, 550);
@@ -255,7 +262,8 @@ export const CustomerLogin: React.FC<{
     setIsOtpLoading(true);
     try {
       const formatted = `${selectedCountry.dial} ${otpPhone}`;
-      await loginCustomerWithOtp(formatted);
+      const res = await loginCustomerWithOtp(formatted);
+      if (onSuccess) onSuccess(res.role);
       onClose();
     } finally {
       setIsOtpLoading(false);
@@ -297,9 +305,11 @@ export const CustomerLogin: React.FC<{
               <Sparkles className="w-4 h-4" />
             </div>
             <div>
-              <span className="text-xs font-semibold text-white block">₹250 Meat Wallet Bonus</span>
+              <span className="text-xs font-semibold text-white block">
+                ₹{WELCOME_FRESH_WALLET_CREDIT_INR} Fresh Wallet Credit
+              </span>
               <span className="text-[11px] text-purple-300">
-                New accounts automatically receive ₹250 welcome credits applicable at checkout.
+                New accounts automatically receive ₹{WELCOME_FRESH_WALLET_CREDIT_INR} Fresh Wallet credit for your first order.
               </span>
             </div>
           </div>
@@ -522,7 +532,7 @@ export const CustomerLogin: React.FC<{
           {activeTab === 'signin' && (
             <div className="py-5 space-y-4">
               <p className="text-xs text-stone-600">
-                Log in with your customer email & password (Admin &amp; Store Incharge credentials also work here) to access your ₹250 Meat Wallet, Wishlist, and saved addresses alongside any active staff session.
+                Log in with your customer email & password (Admin &amp; Store Incharge credentials also work here) to access your ₹{WELCOME_FRESH_WALLET_CREDIT_INR} Fresh Wallet, Wishlist, and saved addresses alongside any active staff session.
               </p>
 
               {signInError && (
@@ -609,7 +619,7 @@ export const CustomerLogin: React.FC<{
                   }}
                   className="font-semibold text-purple-950 hover:underline cursor-pointer py-1"
                 >
-                  Create one now & receive ₹250 Wallet credit
+                  Create one now & receive ₹{WELCOME_FRESH_WALLET_CREDIT_INR} Fresh Wallet credit
                 </button>
               </div>
             </div>
@@ -621,7 +631,7 @@ export const CustomerLogin: React.FC<{
               <div className="p-2.5 bg-emerald-50 border border-emerald-200 rounded-xl text-xs text-emerald-900 flex items-center gap-2">
                 <Sparkles className="w-4 h-4 text-emerald-600 shrink-0" />
                 <span>
-                  Welcome gift: ₹250 Meat Wallet credit is loaded into your account immediately upon registration!
+                  Welcome gift: ₹{WELCOME_FRESH_WALLET_CREDIT_INR} Fresh Wallet credit is loaded into your account immediately upon registration!
                 </span>
               </div>
 
@@ -802,11 +812,11 @@ export const CustomerLogin: React.FC<{
                   {isRegLoading ? (
                     <>
                       <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                      <span>Creating Account & Loading ₹250 Wallet...</span>
+                      <span>Creating Account & Loading ₹{WELCOME_FRESH_WALLET_CREDIT_INR} Wallet...</span>
                     </>
                   ) : (
                     <>
-                      <span>Complete Registration & Claim ₹250</span>
+                      <span>Complete Registration & Claim ₹{WELCOME_FRESH_WALLET_CREDIT_INR}</span>
                       <CheckCircle2 className="w-4 h-4" />
                     </>
                   )}

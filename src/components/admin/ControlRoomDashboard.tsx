@@ -27,8 +27,15 @@ import {
   Code2,
   BarChart3,
 } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 import { getTodayWeekdayName, isSubscriptionDueToday } from '../../utils/date';
 import { useStore } from '../../context/StoreContext';
+import {
+  AdminNavSection,
+  canAccessAdminSection,
+  getPathForAdminSection,
+  ROLE_PERMISSIONS,
+} from '../../config/rbac';
 import {
   InventoryBatch,
   WasteRecord,
@@ -53,10 +60,17 @@ import { SystemSpecsContent } from '../ArchitectureDocsModal';
 
 export const ControlRoomDashboard: React.FC<{
   onClose: () => void;
-}> = ({ onClose }) => {
+  activeSection?: AdminNavSection;
+  fullPage?: boolean;
+}> = ({ onClose, activeSection, fullPage = false }) => {
+  const navigate = useNavigate();
   const {
     adminUser,
+    userRole,
     logoutAdmin,
+    authNotice,
+    dismissAuthNotice,
+    showAuthNotice,
     activeStore,
     stores,
     updateProductOnlineAvailability,
@@ -72,9 +86,10 @@ export const ControlRoomDashboard: React.FC<{
     subscriptions,
   } = useStore();
 
-  const isAdminRole = adminUser?.role === 'Admin';
+  const permissions = ROLE_PERMISSIONS[userRole];
+  const isAdminRole = userRole === 'admin';
   const isStoreAdmin = adminUser?.role === 'Store Admin';
-  const isStoreIncharge = adminUser?.role === 'Store Incharge';
+  const isStoreIncharge = userRole === 'store_incharge';
 
   const displayedActiveStore = useMemo(() => {
     if ((isStoreAdmin || isStoreIncharge) && adminUser?.assignedStoreId) {
@@ -103,50 +118,47 @@ export const ControlRoomDashboard: React.FC<{
     [scopedSubscriptions, todayWeekday]
   );
 
-  // Navigation sub-views (Customer Orders first as primary operations tab)
-  const [activeNav, setActiveNav] = useState<
-    | 'realtime_stock'
-    | 'customer_orders'
-    | 'subscriptions'
-    | 'reports'
-    | 'store_incharges'
-    | 'waste_log'
-    | 'features'
-    | 'system_specs'
-  >('customer_orders');
+  // Navigation sub-views synced with RBAC permissions & route URL
+  const [activeNav, setActiveNav] = useState<AdminNavSection>(
+    activeSection || 'customer_orders'
+  );
   const [isMobileNavOpen, setIsMobileNavOpen] = useState(false);
+
+  useEffect(() => {
+    if (activeSection) {
+      setActiveNav(activeSection);
+    }
+  }, [activeSection]);
 
   // Switch tab when triggered from global New Order alert banner or CustomerProfile shortcut
   useEffect(() => {
     if (requestedControlRoomNav) {
-      if (requestedControlRoomNav === 'reports' && !isAdminRole) {
-        setActiveNav('customer_orders');
+      if (!canAccessAdminSection(userRole, requestedControlRoomNav)) {
+        showAuthNotice('Unauthorized: Restricted Admin section.', 'error');
+        setActiveNav('realtime_stock');
       } else {
         setActiveNav(requestedControlRoomNav);
+        if (fullPage) {
+          navigate(getPathForAdminSection(requestedControlRoomNav));
+        }
       }
       clearRequestedControlRoomNav();
     }
-  }, [requestedControlRoomNav, clearRequestedControlRoomNav, isAdminRole]);
+  }, [requestedControlRoomNav, clearRequestedControlRoomNav, userRole, fullPage, navigate, showAuthNotice]);
 
-  // Enforce screen access restrictions when logged in as Store Incharge, Store Admin, or non-Admin
+  // Enforce RBAC screen access restrictions
   useEffect(() => {
-    if (
-      isStoreIncharge &&
-      activeNav !== 'realtime_stock' &&
-      activeNav !== 'customer_orders' &&
-      activeNav !== 'subscriptions'
-    ) {
-      setActiveNav('customer_orders');
-    } else if (
-      !isAdminRole &&
-      (activeNav === 'reports' ||
-        activeNav === 'features' ||
-        activeNav === 'system_specs' ||
-        activeNav === 'store_incharges')
-    ) {
-      setActiveNav('customer_orders');
+    if (!canAccessAdminSection(userRole, activeNav)) {
+      showAuthNotice(
+        `Unauthorized: ${permissions.label} role does not have permission to view this section.`,
+        'error'
+      );
+      setActiveNav('realtime_stock');
+      if (fullPage) {
+        navigate('/admin/dashboard', { replace: true });
+      }
     }
-  }, [isStoreIncharge, isAdminRole, activeNav]);
+  }, [userRole, activeNav, fullPage, navigate, permissions.label, showAuthNotice]);
 
   // Master Inventory State
   const [batches, setBatches] = useState<InventoryBatch[]>(INITIAL_INVENTORY_BATCHES);
@@ -465,19 +477,19 @@ export const ControlRoomDashboard: React.FC<{
     }
   };
 
-  const selectNav = (
-    nav:
-      | 'realtime_stock'
-      | 'customer_orders'
-      | 'subscriptions'
-      | 'reports'
-      | 'store_incharges'
-      | 'waste_log'
-      | 'features'
-      | 'system_specs'
-  ) => {
+  const selectNav = (nav: AdminNavSection) => {
+    if (!canAccessAdminSection(userRole, nav)) {
+      showAuthNotice(
+        `Unauthorized: ${permissions.label} role cannot access this Admin section.`,
+        'error'
+      );
+      return;
+    }
     setActiveNav(nav);
     setIsMobileNavOpen(false);
+    if (fullPage) {
+      navigate(getPathForAdminSection(nav));
+    }
   };
 
   const renderSidebarContent = (showCloseButton: boolean) => (
@@ -599,8 +611,8 @@ export const ControlRoomDashboard: React.FC<{
             </span>
           </button>
 
-          {/* Reports Analytics Dashboard (Root Admin only) */}
-          {isAdminRole && (
+          {/* Reports Analytics Dashboard (Admin only) */}
+          {canAccessAdminSection(userRole, 'reports') && (
             <button
               type="button"
               onClick={() => selectNav('reports')}
@@ -620,8 +632,8 @@ export const ControlRoomDashboard: React.FC<{
             </button>
           )}
 
-          {/* Store Incharges & Credentials Notebook Tab (Root Admin only) */}
-          {isAdminRole && (
+          {/* Store Incharges & Users Management Tab (Admin only) */}
+          {canAccessAdminSection(userRole, 'store_incharges') && (
             <button
               type="button"
               onClick={() => selectNav('store_incharges')}
@@ -633,7 +645,7 @@ export const ControlRoomDashboard: React.FC<{
             >
               <div className="flex items-center gap-2.5">
                 <BookOpen className="w-4 h-4 text-purple-700 shrink-0" />
-                <span>Incharge Notebook</span>
+                <span>Users &amp; Incharges</span>
               </div>
               <span className="font-mono text-[10px] bg-purple-50 text-purple-800 border border-purple-200 px-1.5 py-0.5 rounded">
                 {storeIncharges.length} Staff
@@ -641,8 +653,8 @@ export const ControlRoomDashboard: React.FC<{
             </button>
           )}
 
-          {/* Waste & Shrinkage Log Tab (Hidden for Store Incharge) */}
-          {!isStoreIncharge && (
+          {/* Waste & Shrinkage Log Tab (Admin only — hidden for Store Incharge) */}
+          {canAccessAdminSection(userRole, 'waste_log') && (
             <button
               type="button"
               onClick={() => selectNav('waste_log')}
@@ -662,50 +674,50 @@ export const ControlRoomDashboard: React.FC<{
             </button>
           )}
 
-          {isAdminRole && (
-            <>
-              <button
-                type="button"
-                onClick={() => selectNav('features')}
-                className={`w-full min-h-[44px] lg:min-h-0 px-3 py-2.5 rounded-xl flex items-center justify-between transition-colors cursor-pointer ${
-                  activeNav === 'features'
-                    ? 'bg-purple-50 text-purple-950 border border-purple-200 shadow-2xs'
-                    : 'text-stone-600 hover:text-purple-950 hover:bg-stone-100 border border-transparent'
+          {canAccessAdminSection(userRole, 'features') && (
+            <button
+              type="button"
+              onClick={() => selectNav('features')}
+              className={`w-full min-h-[44px] lg:min-h-0 px-3 py-2.5 rounded-xl flex items-center justify-between transition-colors cursor-pointer ${
+                activeNav === 'features'
+                  ? 'bg-purple-50 text-purple-950 border border-purple-200 shadow-2xs'
+                  : 'text-stone-600 hover:text-purple-950 hover:bg-stone-100 border border-transparent'
+              }`}
+            >
+              <div className="flex items-center gap-2.5">
+                <ToggleRight className="w-4 h-4 text-purple-700 shrink-0" />
+                <span>Settings &amp; Features</span>
+              </div>
+              <span
+                className={`font-mono text-[10px] px-1.5 py-0.5 rounded border font-bold ${
+                  featureFlags.enableOtherPayments || featureFlags.sendWhatsAppOnOrderConfirmation
+                    ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                    : 'bg-stone-100 text-stone-600 border-stone-200'
                 }`}
               >
-                <div className="flex items-center gap-2.5">
-                  <ToggleRight className="w-4 h-4 text-purple-700 shrink-0" />
-                  <span>Features</span>
-                </div>
-                <span
-                  className={`font-mono text-[10px] px-1.5 py-0.5 rounded border font-bold ${
-                    featureFlags.enableOtherPayments || featureFlags.sendWhatsAppOnOrderConfirmation
-                      ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                      : 'bg-stone-100 text-stone-600 border-stone-200'
-                  }`}
-                >
-                  Admin
-                </span>
-              </button>
+                Admin
+              </span>
+            </button>
+          )}
 
-              <button
-                type="button"
-                onClick={() => selectNav('system_specs')}
-                className={`w-full min-h-[44px] lg:min-h-0 px-3 py-2.5 rounded-xl flex items-center justify-between transition-colors cursor-pointer ${
-                  activeNav === 'system_specs'
-                    ? 'bg-purple-50 text-purple-950 border border-purple-200 shadow-2xs'
-                    : 'text-stone-600 hover:text-purple-950 hover:bg-stone-100 border border-transparent'
-                }`}
-              >
-                <div className="flex items-center gap-2.5">
-                  <Code2 className="w-4 h-4 text-emerald-600 shrink-0" />
-                  <span>System Specs</span>
-                </div>
-                <span className="font-mono text-[10px] bg-purple-50 text-purple-800 border border-purple-200 px-1.5 py-0.5 rounded font-bold">
-                  Admin
-                </span>
-              </button>
-            </>
+          {canAccessAdminSection(userRole, 'system_specs') && (
+            <button
+              type="button"
+              onClick={() => selectNav('system_specs')}
+              className={`w-full min-h-[44px] lg:min-h-0 px-3 py-2.5 rounded-xl flex items-center justify-between transition-colors cursor-pointer ${
+                activeNav === 'system_specs'
+                  ? 'bg-purple-50 text-purple-950 border border-purple-200 shadow-2xs'
+                  : 'text-stone-600 hover:text-purple-950 hover:bg-stone-100 border border-transparent'
+              }`}
+            >
+              <div className="flex items-center gap-2.5">
+                <Code2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                <span>System Specs</span>
+              </div>
+              <span className="font-mono text-[10px] bg-purple-50 text-purple-800 border border-purple-200 px-1.5 py-0.5 rounded font-bold">
+                Admin
+              </span>
+            </button>
           )}
         </nav>
       </div>
@@ -718,12 +730,17 @@ export const ControlRoomDashboard: React.FC<{
               {adminUser?.name || 'Operations Lead'}
             </span>
             <span className="text-[10px] text-stone-500 truncate block">
-              {adminUser?.role || 'Store Manager'}
+              {permissions.label} ({adminUser?.role || 'Staff'})
             </span>
           </div>
           <button
             type="button"
-            onClick={logoutAdmin}
+            onClick={() => {
+              if (fullPage) {
+                navigate('/admin/login', { replace: true });
+              }
+              logoutAdmin();
+            }}
             className="min-w-[44px] min-h-[44px] lg:min-w-0 lg:min-h-0 p-2 lg:p-1.5 flex items-center justify-center text-rose-600 hover:text-rose-800 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer shrink-0"
             title="Sign Out of Admin"
             aria-label="Sign Out of Admin"
@@ -734,7 +751,12 @@ export const ControlRoomDashboard: React.FC<{
 
         <button
           type="button"
-          onClick={onClose}
+          onClick={() => {
+            onClose();
+            if (fullPage) {
+              navigate('/dashboard');
+            }
+          }}
           className="w-full min-h-[44px] lg:min-h-0 py-2 px-3 bg-white hover:bg-stone-100 border border-stone-300 rounded-xl text-xs font-semibold text-stone-700 transition-colors flex items-center justify-center gap-2 cursor-pointer shadow-2xs"
         >
           <ExternalLink className="w-3.5 h-3.5" />
@@ -746,10 +768,37 @@ export const ControlRoomDashboard: React.FC<{
 
   return (
     <div
-      role="dialog"
-      aria-modal="true"
-      className="fixed inset-0 z-50 flex bg-stone-50 text-stone-900 overflow-hidden font-sans select-none"
+      role={fullPage ? 'region' : 'dialog'}
+      aria-modal={fullPage ? undefined : true}
+      className={`${
+        fullPage ? 'h-screen w-screen' : 'fixed inset-0 z-50'
+      } flex bg-stone-50 text-stone-900 overflow-hidden font-sans select-none`}
     >
+      {/* Unauthorized / Access Control Notice */}
+      {authNotice && (
+        <div
+          role="alert"
+          className={`fixed top-4 left-3 right-3 sm:left-1/2 sm:-translate-x-1/2 sm:max-w-lg z-60 px-4 py-3 rounded-xl shadow-xl border flex items-center justify-between gap-3 text-xs font-semibold animate-fade-in ${
+            authNotice.type === 'error'
+              ? 'bg-rose-950 text-rose-100 border-rose-500'
+              : 'bg-purple-950 text-purple-100 border-purple-500'
+          }`}
+        >
+          <div className="flex items-center gap-2 min-w-0">
+            <AlertOctagon className="w-4 h-4 text-rose-400 shrink-0" />
+            <span>{authNotice.message}</span>
+          </div>
+          <button
+            type="button"
+            onClick={dismissAuthNotice}
+            className="p-1 text-white/70 hover:text-white cursor-pointer shrink-0"
+            aria-label="Dismiss alert"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+
       {/* Toast Notification */}
       {toastMessage && (
         <div className="fixed top-4 left-3 right-3 sm:left-auto sm:top-5 sm:right-5 sm:max-w-md z-60 bg-emerald-50 border border-emerald-300 text-emerald-900 px-4 py-3 rounded-xl shadow-lg flex items-center gap-2 text-xs font-semibold animate-fade-in">
@@ -1157,7 +1206,7 @@ export const ControlRoomDashboard: React.FC<{
         )}
 
         {/* WORKSPACE SUB-VIEW 2: WASTE & SHRINKAGE TRACKING LOG */}
-        {activeNav === 'waste_log' && !isStoreIncharge && (
+        {activeNav === 'waste_log' && canAccessAdminSection(userRole, 'waste_log') && (
           <div className="p-3 sm:p-4 space-y-5">
             {/* Shrinkage KPI Bar */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
@@ -1290,7 +1339,7 @@ export const ControlRoomDashboard: React.FC<{
         )}
 
         {/* WORKSPACE SUB-VIEW 3: ADMIN FEATURES & SERVICES TOGGLES */}
-        {activeNav === 'features' && isAdminRole && (
+        {activeNav === 'features' && canAccessAdminSection(userRole, 'features') && (
           <div className="p-3 sm:p-4 space-y-4 max-w-4xl">
             <div className="p-4 bg-white rounded-xl border border-stone-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-2xs">
               <div className="flex items-start gap-3">
@@ -1568,19 +1617,27 @@ export const ControlRoomDashboard: React.FC<{
         )}
 
         {/* WORKSPACE SUB-VIEW: CUSTOMER ORDERS MONITOR */}
-        {activeNav === 'customer_orders' && <CustomerOrdersMonitor />}
+        {activeNav === 'customer_orders' && canAccessAdminSection(userRole, 'customer_orders') && (
+          <CustomerOrdersMonitor />
+        )}
 
         {/* WORKSPACE SUB-VIEW: SUBSCRIPTIONS MONITOR */}
-        {activeNav === 'subscriptions' && <SubscriptionsMonitor />}
+        {activeNav === 'subscriptions' && canAccessAdminSection(userRole, 'subscriptions') && (
+          <SubscriptionsMonitor />
+        )}
 
         {/* WORKSPACE SUB-VIEW: REPORTS DASHBOARD (ADMIN ONLY) */}
-        {activeNav === 'reports' && isAdminRole && <ReportsDashboard />}
+        {activeNav === 'reports' && canAccessAdminSection(userRole, 'reports') && (
+          <ReportsDashboard />
+        )}
 
-        {/* WORKSPACE SUB-VIEW: STORE INCHARGES NOTEBOOK */}
-        {activeNav === 'store_incharges' && !isStoreIncharge && <StoreInchargesNotebook />}
+        {/* WORKSPACE SUB-VIEW: STORE INCHARGES & USERS (ADMIN ONLY) */}
+        {activeNav === 'store_incharges' && canAccessAdminSection(userRole, 'store_incharges') && (
+          <StoreInchargesNotebook />
+        )}
 
         {/* WORKSPACE SUB-VIEW: SYSTEM SPECS (ADMIN ONLY) */}
-        {activeNav === 'system_specs' && isAdminRole && (
+        {activeNav === 'system_specs' && canAccessAdminSection(userRole, 'system_specs') && (
           <div className="p-3 sm:p-4">
             <div className="rounded-xl border border-stone-200 overflow-hidden bg-white shadow-2xs">
               <SystemSpecsContent />

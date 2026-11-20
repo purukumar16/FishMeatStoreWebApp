@@ -59,7 +59,8 @@ export const recalculateOrderWithFinalWeights = (
   order: OrderRecord,
   finalWeightsByIndex: Record<number, number>,
   updatedBy: string,
-  updatedAt: string
+  updatedAt: string,
+  finalLineTotalsByIndex?: Record<number, number>
 ): OrderRecord => {
   const originalSubtotal =
     typeof order.originalSubtotal === 'number' ? order.originalSubtotal : order.subtotal;
@@ -76,7 +77,11 @@ export const recalculateOrderWithFinalWeights = (
       0,
       Math.min(100000, Math.round(Number.isFinite(rawWeight) ? rawWeight : fallbackGrams))
     );
-    const finalLineTotal = calculateFinalLineTotal(item, finalWeightGrams);
+    const overridePrice = finalLineTotalsByIndex?.[idx];
+    const finalLineTotal =
+      typeof overridePrice === 'number' && Number.isFinite(overridePrice) && overridePrice >= 0
+        ? Math.max(0, Math.min(500000, Math.round(overridePrice)))
+        : calculateFinalLineTotal(item, finalWeightGrams);
     const qty = Math.max(1, Number(item.quantity) || 1);
     const finalUnitPrice = Math.round((finalLineTotal / qty) * 100) / 100;
 
@@ -101,6 +106,7 @@ export const recalculateOrderWithFinalWeights = (
     items: updatedItems,
     subtotal: newSubtotal,
     originalSubtotal,
+    loyaltyDiscountAmount: appliedDiscount,
     loyaltyPointsEarned: nextLoyaltyEarned,
     total: newTotal,
     originalTotal,

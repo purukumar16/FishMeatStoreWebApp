@@ -23,12 +23,15 @@ import {
   BookOpen,
 } from 'lucide-react';
 import { useStore } from '../../context/StoreContext';
+import { AppRole, normalizeAppRole } from '../../config/rbac';
 import { AdminUser } from '../../types';
 
 export const AdminLogin: React.FC<{
   onSwitchToCustomer: () => void;
   onClose: () => void;
-}> = ({ onSwitchToCustomer, onClose }) => {
+  onSuccess?: (role: AppRole) => void;
+  onUnauthorizedCustomer?: (message: string) => void;
+}> = ({ onSwitchToCustomer, onClose, onSuccess, onUnauthorizedCustomer }) => {
   const {
     loginWithGoogle,
     firebaseUser,
@@ -48,9 +51,21 @@ export const AdminLogin: React.FC<{
   const handleGoogleAdminSignIn = async () => {
     setGoogleError(null);
     const res = await loginWithGoogle('admin');
+    if (res.role === 'customer') {
+      const msg =
+        res.error ||
+        'Unauthorized: Customer accounts cannot access /admin routes. Redirected to /dashboard.';
+      if (onUnauthorizedCustomer) {
+        onUnauthorizedCustomer(msg);
+      } else {
+        setGoogleError(msg);
+      }
+      return;
+    }
     if (!res.success && res.error) {
       setGoogleError(res.error);
     } else if (res.success) {
+      if (onSuccess) onSuccess(res.role || 'admin');
       onClose();
     }
   };
@@ -149,6 +164,18 @@ export const AdminLogin: React.FC<{
       setIsLoading(false);
 
       const res = authenticateStaff(workEmail, password);
+      if (res.role === 'customer') {
+        const msg =
+          res.error ||
+          'Unauthorized: Customer accounts cannot access Admin routes. Redirected to /dashboard.';
+        if (onUnauthorizedCustomer) {
+          onUnauthorizedCustomer(msg);
+        } else {
+          setCredentialError(msg);
+        }
+        return;
+      }
+
       if (!res.success || !res.user) {
         const nextAttempts = failedAttempts + 1;
         setFailedAttempts(nextAttempts);
@@ -233,14 +260,18 @@ export const AdminLogin: React.FC<{
         return;
       }
 
+      let staffRole: AppRole = 'admin';
       if (pendingStaffUser) {
         loginAdmin(pendingStaffUser);
+        staffRole = pendingStaffUser.appRole || normalizeAppRole(pendingStaffUser.role);
       } else {
         const res = authenticateStaff(workEmail, password);
         if (res.user) {
           loginAdmin(res.user);
+          staffRole = res.role || res.user.appRole || normalizeAppRole(res.user.role);
         }
       }
+      if (onSuccess) onSuccess(staffRole);
       onClose();
     }, 400);
   };
@@ -264,6 +295,9 @@ export const AdminLogin: React.FC<{
     const res = authenticateStaff(email, pass);
     if (res.success && res.user) {
       loginAdmin(res.user);
+      if (onSuccess) {
+        onSuccess(res.role || res.user.appRole || normalizeAppRole(res.user.role));
+      }
       onClose();
     }
   };
@@ -346,8 +380,12 @@ export const AdminLogin: React.FC<{
                   <button
                     type="button"
                     onClick={() => {
+                      if (onSuccess) {
+                        onSuccess(adminUser.appRole || normalizeAppRole(adminUser.role));
+                      } else {
+                        setIsAdminDashboardOpen(true);
+                      }
                       onClose();
-                      setIsAdminDashboardOpen(true);
                     }}
                     className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-[11px] cursor-pointer"
                   >

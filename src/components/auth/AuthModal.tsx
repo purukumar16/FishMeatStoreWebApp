@@ -1,10 +1,12 @@
 import React, { useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { X, ShoppingBag, ShieldCheck, Lock } from 'lucide-react';
 import { useStore } from '../../context/StoreContext';
 import { CustomerLogin } from './CustomerLogin';
 import { AdminLogin } from './AdminLogin';
 
 export const AuthModal: React.FC = () => {
+  const navigate = useNavigate();
   const {
     isAuthModalOpen,
     setIsAuthModalOpen,
@@ -12,6 +14,7 @@ export const AuthModal: React.FC = () => {
     setAuthInitialTab,
     currentUser,
     adminUser,
+    showAuthNotice,
   } = useStore();
 
   // Handle ESC key to close modal
@@ -99,13 +102,26 @@ export const AuthModal: React.FC = () => {
 
           {authInitialTab === 'customer' ? (
             <CustomerLogin
-              onSwitchToAdmin={() => setAuthInitialTab('admin')}
+              onSwitchToAdmin={() => {
+                setIsAuthModalOpen(false);
+                navigate('/admin/login');
+              }}
               onClose={() => setIsAuthModalOpen(false)}
+              onSuccess={() => setIsAuthModalOpen(false)}
             />
           ) : (
             <AdminLogin
               onSwitchToCustomer={() => setAuthInitialTab('customer')}
               onClose={() => setIsAuthModalOpen(false)}
+              onSuccess={() => {
+                setIsAuthModalOpen(false);
+                navigate('/admin/dashboard');
+              }}
+              onUnauthorizedCustomer={(msg) => {
+                setIsAuthModalOpen(false);
+                showAuthNotice(msg, 'error');
+                navigate('/dashboard');
+              }}
             />
           )}
         </div>

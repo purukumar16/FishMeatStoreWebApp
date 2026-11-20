@@ -9,10 +9,12 @@ import {
   ArrowRight,
   RotateCcw,
 } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 import { useStore } from '../context/StoreContext';
 import { WeightVariant } from '../types';
 
 export const WishlistDrawer: React.FC = () => {
+  const navigate = useNavigate();
   const {
     currentUser,
     isWishlistDrawerOpen,
@@ -25,8 +27,6 @@ export const WishlistDrawer: React.FC = () => {
     quickReorderAllWishlist,
     setSelectedProductForDetail,
     setIsCartOpen,
-    setIsAuthModalOpen,
-    setAuthInitialTab,
     activeStore,
   } = useStore();
 
@@ -124,8 +124,7 @@ export const WishlistDrawer: React.FC = () => {
                   type="button"
                   onClick={() => {
                     setIsWishlistDrawerOpen(false);
-                    setAuthInitialTab('customer');
-                    setIsAuthModalOpen(true);
+                    navigate('/login');
                   }}
                   className="px-5 min-h-[44px] py-2 bg-purple-900 hover:bg-purple-950 text-white text-xs font-semibold rounded-lg transition-colors cursor-pointer"
                 >

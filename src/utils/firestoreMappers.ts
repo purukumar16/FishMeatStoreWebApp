@@ -12,13 +12,15 @@ import {
   Store,
   SubscriptionDay,
   SubscriptionFrequency,
+  UserRole,
   WeightVariant,
   WishlistItemPreference,
 } from '../types';
+import { normalizeAppRole } from '../config/rbac';
 import { PHYSICAL_STORES } from '../data/stores';
 import { DELIVERY_SLOTS } from '../data/slots';
 import { getLocalDateString } from './date';
-import { WELCOME_LOYALTY_POINTS } from './loyalty';
+import { WELCOME_FRESH_WALLET_CREDIT_INR, WELCOME_LOYALTY_POINTS } from './loyalty';
 
 export const FIRESTORE_ID_REGEX = /^[a-zA-Z0-9_\-]+$/;
 
@@ -384,12 +386,14 @@ export function hydrateSubscriptionFromFirestore(
 
 export function buildInitialUserProfilePayload(
   uid: string,
-  name: string
+  name: string,
+  role: UserRole = 'customer'
 ): Record<string, unknown> & { createdAt: FieldValue; updatedAt: FieldValue } {
   return {
     uid: truncateStr(uid, 128),
     name: truncateStr(name || 'Valued Customer', 100) || 'Valued Customer',
-    walletBalance: 250,
+    role,
+    walletBalance: WELCOME_FRESH_WALLET_CREDIT_INR,
     loyaltyPoints: WELCOME_LOYALTY_POINTS,
     totalLoyaltyEarned: WELCOME_LOYALTY_POINTS,
     totalLoyaltyRedeemed: 0,
@@ -411,7 +415,8 @@ export function buildCustomerFromFirestoreDocs(
   uid: string,
   profileData: Record<string, unknown>,
   privateData: Record<string, unknown>,
-  customerType?: CustomerUser['customerType']
+  customerType?: CustomerUser['customerType'],
+  resolvedRole?: UserRole
 ): CustomerUser {
   const savedAddressesRaw = Array.isArray(privateData.savedAddresses)
     ? (privateData.savedAddresses as SavedAddress[])
@@ -431,16 +436,31 @@ export function buildCustomerFromFirestoreDocs(
       ? Math.max(0, Math.floor(profileData.totalLoyaltyRedeemed))
       : 0;
 
+  const docRoleRaw = typeof profileData.role === 'string' ? profileData.role : undefined;
+  const role: UserRole = resolvedRole
+    ? resolvedRole
+    : docRoleRaw
+    ? normalizeAppRole(docRoleRaw)
+    : customerType
+    ? normalizeAppRole(customerType)
+    : 'customer';
+
   return {
     id: uid,
     name: String(profileData.name || 'Valued Customer'),
     email: String(privateData.email || ''),
     phone: String(privateData.phone || ''),
-    customerType,
+    role,
+    customerType:
+      customerType ||
+      (role === 'admin' ? 'Admin' : role === 'store_incharge' ? 'Store Incharge' : 'Customer'),
     addresses: savedAddresses.map((a) => a.formattedAddress).filter(Boolean),
     savedAddresses,
     savedOrdersCount: Number(profileData.savedOrdersCount) || 0,
-    walletBalance: Number(profileData.walletBalance) || 250,
+    walletBalance:
+      typeof profileData.walletBalance === 'number' && Number.isFinite(profileData.walletBalance)
+        ? Math.max(0, profileData.walletBalance)
+        : WELCOME_FRESH_WALLET_CREDIT_INR,
     loyaltyPoints,
     totalLoyaltyEarned,
     totalLoyaltyRedeemed,

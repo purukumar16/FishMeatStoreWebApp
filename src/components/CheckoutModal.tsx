@@ -10,6 +10,7 @@ import {
   Award,
   Check,
 } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 import { useStore } from '../context/StoreContext';
 import {
   getStoreWhatsAppRaw,
@@ -25,6 +26,7 @@ import {
 } from '../utils/loyalty';
 
 export const CheckoutModal: React.FC = () => {
+  const navigate = useNavigate();
   const {
     isCheckoutOpen,
     setIsCheckoutOpen,
@@ -37,8 +39,6 @@ export const CheckoutModal: React.FC = () => {
     waitForOrderSync,
     currentUser,
     featureFlags,
-    setIsAuthModalOpen,
-    setAuthInitialTab,
   } = useStore();
 
   const [name, setName] = useState(currentUser?.name || '');
@@ -452,8 +452,7 @@ export const CheckoutModal: React.FC = () => {
                   type="button"
                   onClick={() => {
                     setIsCheckoutOpen(false);
-                    setAuthInitialTab('customer');
-                    setIsAuthModalOpen(true);
+                    navigate('/login');
                   }}
                   className="px-3 py-1.5 rounded-lg bg-white border border-stone-300 hover:bg-stone-100 text-purple-950 font-semibold text-[11px] shrink-0 cursor-pointer whitespace-nowrap"
                 >

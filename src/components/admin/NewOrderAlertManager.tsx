@@ -1,22 +1,27 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { PhoneCall, CheckCircle2, Volume2, ShoppingBag } from 'lucide-react';
 import { useStore } from '../../context/StoreContext';
+import { ROLE_PERMISSIONS } from '../../config/rbac';
 
 const ORDER_ALERT_AUDIO_SRC =
   '/assets/aistudio/scottishperson-sound-effect-old-phone-191761_df4cb6e9.mp3';
 
 export const NewOrderAlertManager: React.FC = () => {
+  const navigate = useNavigate();
   const {
     adminUser,
+    userRole,
     pendingIncomingOrders,
     acceptOrder,
-    openControlRoomCustomerOrders,
   } = useStore();
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [needsAudioUnlock, setNeedsAudioUnlock] = useState(false);
 
-  const shouldRing = Boolean(adminUser) && pendingIncomingOrders.length > 0;
+  const shouldRing =
+    Boolean(adminUser && ROLE_PERMISSIONS[userRole].canAccessAdminPortal) &&
+    pendingIncomingOrders.length > 0;
   const latestOrder = pendingIncomingOrders[0] || null;
 
   const tryPlayAlert = async () => {
@@ -134,7 +139,7 @@ export const NewOrderAlertManager: React.FC = () => {
 
             <button
               type="button"
-              onClick={openControlRoomCustomerOrders}
+              onClick={() => navigate('/admin/orders')}
               className="min-h-[44px] sm:min-h-0 px-3 py-2 bg-purple-900 hover:bg-purple-800 text-purple-100 border border-purple-700 font-semibold text-xs rounded-xl transition-colors cursor-pointer flex items-center justify-center gap-1.5"
             >
               <ShoppingBag className="w-3.5 h-3.5 text-emerald-300" />

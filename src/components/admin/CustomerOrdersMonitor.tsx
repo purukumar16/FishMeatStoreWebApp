@@ -39,6 +39,7 @@ import {
   getEffectiveItemLineTotal,
   getOrderedItemWeightGrams,
 } from '../../utils/orderWeight';
+import { getOrderLoyaltyDiscount } from '../../utils/loyalty';
 
 export const CustomerOrdersMonitor: React.FC = () => {
   const {
@@ -80,6 +81,8 @@ export const CustomerOrdersMonitor: React.FC = () => {
   const [selectedOrderForKOT, setSelectedOrderForKOT] = useState<OrderRecord | null>(null);
   const [orderForWeightUpdate, setOrderForWeightUpdate] = useState<OrderRecord | null>(null);
   const [weightInputsByIndex, setWeightInputsByIndex] = useState<Record<number, string>>({});
+  const [priceInputsByIndex, setPriceInputsByIndex] = useState<Record<number, string>>({});
+  const [customPriceEditedByIndex, setCustomPriceEditedByIndex] = useState<Record<number, boolean>>({});
   const [isSavingFinalWeights, setIsSavingFinalWeights] = useState(false);
   const [weightUpdateError, setWeightUpdateError] = useState<string | null>(null);
   const [orderToCancel, setOrderToCancel] = useState<OrderRecord | null>(null);
@@ -88,15 +91,23 @@ export const CustomerOrdersMonitor: React.FC = () => {
   const [actionSuccessToast, setActionSuccessToast] = useState<string | null>(null);
 
   const openFinalWeightModal = (order: OrderRecord) => {
-    const initialInputs: Record<number, string> = {};
+    const initialWeights: Record<number, string> = {};
+    const initialPrices: Record<number, string> = {};
+    const initialEdited: Record<number, boolean> = {};
     order.items.forEach((item, idx) => {
       const grams =
         typeof item.finalWeightGrams === 'number'
           ? item.finalWeightGrams
           : getOrderedItemWeightGrams(item);
-      initialInputs[idx] = String(grams);
+      const calculatedPrice = calculateFinalLineTotal(item, grams);
+      const currentPrice = getEffectiveItemLineTotal(item);
+      initialWeights[idx] = String(grams);
+      initialPrices[idx] = String(currentPrice);
+      initialEdited[idx] = currentPrice !== calculatedPrice;
     });
-    setWeightInputsByIndex(initialInputs);
+    setWeightInputsByIndex(initialWeights);
+    setPriceInputsByIndex(initialPrices);
+    setCustomPriceEditedByIndex(initialEdited);
     setWeightUpdateError(null);
     setOrderForWeightUpdate(order);
   };
@@ -115,33 +126,110 @@ export const CustomerOrdersMonitor: React.FC = () => {
     return out;
   }, [orderForWeightUpdate, weightInputsByIndex]);
 
+  const parsedFinalPrices = useMemo<Record<number, number>>(() => {
+    if (!orderForWeightUpdate) return {};
+    const out: Record<number, number> = {};
+    orderForWeightUpdate.items.forEach((item, idx) => {
+      const finalGrams = parsedFinalWeights[idx] ?? getOrderedItemWeightGrams(item);
+      const autoPrice = calculateFinalLineTotal(item, finalGrams);
+      if (customPriceEditedByIndex[idx]) {
+        const rawPrice = priceInputsByIndex[idx];
+        const parsedPrice = Number(rawPrice);
+        out[idx] =
+          rawPrice !== undefined &&
+          rawPrice.trim() !== '' &&
+          Number.isFinite(parsedPrice) &&
+          parsedPrice >= 0
+            ? Math.min(500000, Math.round(parsedPrice))
+            : autoPrice;
+      } else {
+        out[idx] = autoPrice;
+      }
+    });
+    return out;
+  }, [orderForWeightUpdate, parsedFinalWeights, priceInputsByIndex, customPriceEditedByIndex]);
+
   const handleSaveFinalWeights = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!orderForWeightUpdate) return;
+    if (!orderForWeightUpdate || isSavingFinalWeights) return;
+
+    const finalWeightsPayload: Record<number, number> = {};
+    const finalPricesPayload: Record<number, number> = {};
 
     for (let idx = 0; idx < orderForWeightUpdate.items.length; idx++) {
-      const raw = weightInputsByIndex[idx];
-      const parsed = Number(raw);
-      if (raw === undefined || raw.trim() === '' || !Number.isFinite(parsed) || parsed < 0 || parsed > 100000) {
+      const item = orderForWeightUpdate.items[idx];
+      const rawWeight = weightInputsByIndex[idx];
+      const parsedWeight = Number(rawWeight);
+      if (
+        rawWeight === undefined ||
+        rawWeight.trim() === '' ||
+        !Number.isFinite(parsedWeight) ||
+        parsedWeight < 0 ||
+        parsedWeight > 100000
+      ) {
         setWeightUpdateError(
-          `Please enter a valid final weight (0g - 100,000g) for ${orderForWeightUpdate.items[idx].product.name}.`
+          `Please enter a valid final weight (0g - 100,000g) for ${item.product.name}.`
         );
         return;
       }
+      const cleanWeight = Math.min(100000, Math.round(parsedWeight));
+      finalWeightsPayload[idx] = cleanWeight;
+
+      if (customPriceEditedByIndex[idx]) {
+        const rawPrice = priceInputsByIndex[idx];
+        const parsedPrice = Number(rawPrice);
+        if (
+          rawPrice === undefined ||
+          rawPrice.trim() === '' ||
+          !Number.isFinite(parsedPrice) ||
+          parsedPrice < 0 ||
+          parsedPrice > 500000
+        ) {
+          setWeightUpdateError(
+            `Please enter a valid final price (₹0 - ₹500,000) for ${item.product.name}.`
+          );
+          return;
+        }
+        finalPricesPayload[idx] = Math.min(500000, Math.round(parsedPrice));
+      } else {
+        finalPricesPayload[idx] = calculateFinalLineTotal(item, cleanWeight);
+      }
     }
+
+    const nextSubtotal = Object.values(finalPricesPayload).reduce((sum, val) => sum + val, 0);
+    const appliedDiscount = Math.min(
+      nextSubtotal,
+      getOrderLoyaltyDiscount(orderForWeightUpdate)
+    );
+    const nextTotal =
+      Math.max(0, nextSubtotal - appliedDiscount) +
+      (Number(orderForWeightUpdate.deliveryFee) || 0) +
+      (Number(orderForWeightUpdate.packagingFee) || 0);
 
     setIsSavingFinalWeights(true);
     setWeightUpdateError(null);
     try {
-      const saved = await updateOrderFinalWeights(orderForWeightUpdate.orderId, parsedFinalWeights);
+      const saved = await updateOrderFinalWeights(
+        orderForWeightUpdate.orderId,
+        finalWeightsPayload,
+        finalPricesPayload
+      );
       if (saved) {
-        showToast(
-          `✓ Final weights & customer bill updated for Order #${orderForWeightUpdate.orderId}.`
-        );
+        const updatedId = orderForWeightUpdate.orderId;
         setOrderForWeightUpdate(null);
+        setWeightUpdateError(null);
+        showToast(
+          `✓ Final weight & price updated for Order #${updatedId} — Updated Bill: ₹${nextTotal}.`
+        );
       } else {
-        setWeightUpdateError('Unable to save final weight update. Please check order status & permissions.');
+        setWeightUpdateError(
+          'Unable to save final weight & price update to Firestore. Please verify you are signed in with Admin/Store Admin permissions and try again.'
+        );
       }
+    } catch {
+      setWeightUpdateError(
+        'Failed to save final weight & price update. Please check your connection and try again.'
+      );
     } finally {
       setIsSavingFinalWeights(false);
     }
@@ -735,7 +823,7 @@ export const CustomerOrdersMonitor: React.FC = () => {
                               ₹{order.originalTotal}
                             </span>
                           )}
-                          <span>Total: ₹{order.total}</span>
+                          <span>{order.weightUpdatedAt ? `Updated Total: ₹${order.total}` : `Total: ₹${order.total}`}</span>
                         </span>
                       </div>
                     </div>
@@ -743,7 +831,7 @@ export const CustomerOrdersMonitor: React.FC = () => {
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
                       {order.items.map((item, idx) => {
                         const orderedGrams = getOrderedItemWeightGrams(item);
-                        const originalLineTotal = item.unitPrice * item.quantity;
+                        const originalLineTotal = Math.round(item.unitPrice * item.quantity);
                         const effectiveLineTotal = getEffectiveItemLineTotal(item);
                         const hasFinalWeight = typeof item.finalWeightGrams === 'number';
                         const weightDiff = hasFinalWeight ? item.finalWeightGrams! - orderedGrams : 0;
@@ -1131,10 +1219,10 @@ export const CustomerOrdersMonitor: React.FC = () => {
               </button>
             </div>
 
-            <form onSubmit={handleSaveFinalWeights} className="flex flex-col flex-1 overflow-hidden">
+            <form onSubmit={handleSaveFinalWeights} noValidate className="flex flex-col flex-1 overflow-hidden">
               <div className="p-4 sm:p-5 space-y-4 overflow-y-auto flex-1 text-xs">
                 <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-[11px] text-amber-950 leading-relaxed">
-                  Enter the exact weighed weight (in <strong>grams</strong>) for each freshly prepared cut below. Item prices and the customer&apos;s final bill recalculate automatically in proportion to the ordered weight.
+                  Enter the exact weighed weight (in <strong>grams</strong>) for each freshly prepared cut below. Item prices and the customer&apos;s final bill recalculate automatically (or you can adjust the final item price directly).
                 </div>
 
                 <div className="space-y-3">
@@ -1142,8 +1230,12 @@ export const CustomerOrdersMonitor: React.FC = () => {
                     const orderedGrams = getOrderedItemWeightGrams(item);
                     const rawInput = weightInputsByIndex[idx] ?? String(orderedGrams);
                     const finalGrams = parsedFinalWeights[idx] ?? orderedGrams;
-                    const originalLineTotal = item.unitPrice * item.quantity;
-                    const updatedLineTotal = calculateFinalLineTotal(item, finalGrams);
+                    const originalLineTotal = Math.round(item.unitPrice * item.quantity);
+                    const autoCalculatedPrice = calculateFinalLineTotal(item, finalGrams);
+                    const updatedLineTotal = parsedFinalPrices[idx] ?? autoCalculatedPrice;
+                    const rawPriceInput = customPriceEditedByIndex[idx]
+                      ? (priceInputsByIndex[idx] ?? String(updatedLineTotal))
+                      : String(autoCalculatedPrice);
                     const gramsDiff = finalGrams - orderedGrams;
                     const priceDiff = updatedLineTotal - originalLineTotal;
 
@@ -1196,11 +1288,26 @@ export const CustomerOrdersMonitor: React.FC = () => {
                                 type="number"
                                 min={0}
                                 max={100000}
-                                step={1}
+                                step="any"
                                 value={rawInput}
                                 onChange={(e) => {
                                   const val = e.target.value;
                                   setWeightInputsByIndex((prev) => ({ ...prev, [idx]: val }));
+                                  const parsed = Number(val);
+                                  if (val.trim() !== '' && Number.isFinite(parsed) && parsed >= 0) {
+                                    const nextPrice = calculateFinalLineTotal(
+                                      item,
+                                      Math.min(100000, Math.round(parsed))
+                                    );
+                                    setPriceInputsByIndex((prev) => ({
+                                      ...prev,
+                                      [idx]: String(nextPrice),
+                                    }));
+                                    setCustomPriceEditedByIndex((prev) => ({
+                                      ...prev,
+                                      [idx]: false,
+                                    }));
+                                  }
                                   if (weightUpdateError) setWeightUpdateError(null);
                                 }}
                                 className="w-28 min-h-[40px] sm:min-h-[34px] px-2.5 py-1 bg-white border border-purple-300 rounded-lg font-mono font-bold text-stone-900 text-xs focus:outline-hidden focus:ring-2 focus:ring-purple-600"
@@ -1210,18 +1317,27 @@ export const CustomerOrdersMonitor: React.FC = () => {
                               </span>
                             </div>
 
-                            {gramsDiff !== 0 ? (
+                            {gramsDiff !== 0 || customPriceEditedByIndex[idx] ? (
                               <button
                                 type="button"
-                                onClick={() =>
+                                onClick={() => {
                                   setWeightInputsByIndex((prev) => ({
                                     ...prev,
                                     [idx]: String(orderedGrams),
-                                  }))
-                                }
+                                  }));
+                                  setPriceInputsByIndex((prev) => ({
+                                    ...prev,
+                                    [idx]: String(originalLineTotal),
+                                  }));
+                                  setCustomPriceEditedByIndex((prev) => ({
+                                    ...prev,
+                                    [idx]: false,
+                                  }));
+                                  if (weightUpdateError) setWeightUpdateError(null);
+                                }}
                                 className="text-[11px] text-purple-800 hover:text-purple-950 underline font-semibold cursor-pointer"
                               >
-                                Reset ({orderedGrams}g)
+                                Reset ({orderedGrams}g / ₹{originalLineTotal})
                               </button>
                             ) : (
                               <span className="text-[10px] font-semibold text-stone-500 bg-white px-2 py-0.5 rounded border border-stone-200">
@@ -1230,7 +1346,7 @@ export const CustomerOrdersMonitor: React.FC = () => {
                             )}
                           </div>
 
-                          <div className="flex items-center justify-between sm:justify-end gap-2 shrink-0">
+                          <div className="flex flex-wrap items-center justify-between sm:justify-end gap-2 shrink-0">
                             {gramsDiff !== 0 && (
                               <span
                                 className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded-full border ${
@@ -1242,14 +1358,31 @@ export const CustomerOrdersMonitor: React.FC = () => {
                                 {gramsDiff > 0 ? `+${gramsDiff}g` : `${gramsDiff}g`}
                               </span>
                             )}
-                            <div className="text-right">
-                              <span className="text-[10px] text-stone-500 mr-1">Final Item Price:</span>
-                              <span className="font-mono font-bold text-sm text-purple-950">
-                                ₹{updatedLineTotal}
-                              </span>
+                            <div className="flex items-center gap-1.5">
+                              <label
+                                htmlFor={`final-price-input-${idx}`}
+                                className="text-[10px] font-semibold text-stone-600 whitespace-nowrap"
+                              >
+                                Final Price (₹):
+                              </label>
+                              <input
+                                id={`final-price-input-${idx}`}
+                                type="number"
+                                min={0}
+                                max={500000}
+                                step="any"
+                                value={rawPriceInput}
+                                onChange={(e) => {
+                                  const val = e.target.value;
+                                  setPriceInputsByIndex((prev) => ({ ...prev, [idx]: val }));
+                                  setCustomPriceEditedByIndex((prev) => ({ ...prev, [idx]: true }));
+                                  if (weightUpdateError) setWeightUpdateError(null);
+                                }}
+                                className="w-24 min-h-[40px] sm:min-h-[34px] px-2 py-1 bg-white border border-purple-300 rounded-lg font-mono font-bold text-purple-950 text-xs text-right focus:outline-hidden focus:ring-2 focus:ring-purple-600"
+                              />
                               {priceDiff !== 0 && (
                                 <span
-                                  className={`ml-1.5 text-[10px] font-mono font-bold ${
+                                  className={`text-[10px] font-mono font-bold ${
                                     priceDiff > 0 ? 'text-emerald-700' : 'text-amber-700'
                                   }`}
                                 >
@@ -1269,14 +1402,18 @@ export const CustomerOrdersMonitor: React.FC = () => {
                   const previewSubtotal = orderForWeightUpdate.items.reduce(
                     (sum, item, idx) =>
                       sum +
-                      calculateFinalLineTotal(
-                        item,
-                        parsedFinalWeights[idx] ?? getOrderedItemWeightGrams(item)
-                      ),
+                      (parsedFinalPrices[idx] ??
+                        calculateFinalLineTotal(
+                          item,
+                          parsedFinalWeights[idx] ?? getOrderedItemWeightGrams(item)
+                        )),
                     0
                   );
+                  const existingDiscount = getOrderLoyaltyDiscount(orderForWeightUpdate);
+                  const appliedDiscount = Math.min(previewSubtotal, existingDiscount);
+                  const netSubtotal = Math.max(0, previewSubtotal - appliedDiscount);
                   const previewTotal =
-                    previewSubtotal +
+                    netSubtotal +
                     (Number(orderForWeightUpdate.deliveryFee) || 0) +
                     (Number(orderForWeightUpdate.packagingFee) || 0);
                   const baseEstTotal =
@@ -1291,6 +1428,12 @@ export const CustomerOrdersMonitor: React.FC = () => {
                         <span>Updated Items Subtotal</span>
                         <span className="font-mono font-bold text-stone-900">₹{previewSubtotal}</span>
                       </div>
+                      {appliedDiscount > 0 && (
+                        <div className="flex items-center justify-between text-xs text-emerald-700 font-semibold">
+                          <span>Loyalty Points Discount</span>
+                          <span className="font-mono">-₹{appliedDiscount}</span>
+                        </div>
+                      )}
                       <div className="flex items-center justify-between text-xs text-stone-700">
                         <span>Delivery Fee</span>
                         <span className="font-mono">
@@ -1362,8 +1505,8 @@ export const CustomerOrdersMonitor: React.FC = () => {
                   <Scale className="w-3.5 h-3.5 text-amber-300" />
                   <span>
                     {isSavingFinalWeights
-                      ? 'Saving Weights...'
-                      : 'Save Final Weight & Update Bill'}
+                      ? 'Saving Weights & Price...'
+                      : 'Save & Update Price'}
                   </span>
                 </button>
               </div>

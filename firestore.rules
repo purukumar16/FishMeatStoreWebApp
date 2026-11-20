@@ -61,10 +61,24 @@ service cloud.firestore {
       );
     }
 
-    function isStaff() {
+    function hasUserDocRole(targetRole) {
       return isVerifiedUser() &&
-        exists(/databases/$(database)/documents/staffUsers/$(request.auth.uid)) &&
-        get(/databases/$(database)/documents/staffUsers/$(request.auth.uid)).data.status == 'active';
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == targetRole;
+    }
+
+    function isAdminOrRole() {
+      return isAdmin() || hasUserDocRole('admin');
+    }
+
+    function isStaff() {
+      return isVerifiedUser() && (
+        (
+          exists(/databases/$(database)/documents/staffUsers/$(request.auth.uid)) &&
+          get(/databases/$(database)/documents/staffUsers/$(request.auth.uid)).data.status == 'active'
+        ) ||
+        hasUserDocRole('store_incharge')
+      );
     }
 
     function isOwner(userId) {
@@ -85,6 +99,7 @@ service cloud.firestore {
         data.keys().hasOnly([
           'uid',
           'name',
+          'role',
           'walletBalance',
           'loyaltyPoints',
           'totalLoyaltyEarned',
@@ -100,6 +115,7 @@ service cloud.firestore {
         ]) &&
         data.uid is string && isValidId(data.uid) && data.uid == userId &&
         data.name is string && data.name.size() >= 1 && data.name.size() <= 100 &&
+        (!data.keys().hasAny(['role']) || data.role in ['customer', 'admin', 'store_incharge']) &&
         data.walletBalance is number && data.walletBalance >= 0 && data.walletBalance <= 100000 &&
         (!data.keys().hasAny(['loyaltyPoints']) || (data.loyaltyPoints is number && data.loyaltyPoints >= 0 && data.loyaltyPoints <= 1000000)) &&
         (!data.keys().hasAny(['totalLoyaltyEarned']) || (data.totalLoyaltyEarned is number && data.totalLoyaltyEarned >= 0 && data.totalLoyaltyEarned <= 1000000)) &&
@@ -442,6 +458,13 @@ service cloud.firestore {
       allow create: if isValidId(userId) &&
         isOwner(userId) &&
         isValidUserProfile(incoming(), userId) &&
+        (
+          !incoming().keys().hasAny(['role']) ||
+          incoming().role == 'customer' ||
+          isBootstrappedAdmin() ||
+          (isStoreAdmin() && incoming().role == 'store_incharge') ||
+          isAdmin()
+        ) &&
         incoming().createdAt == request.time &&
         incoming().updatedAt == request.time;
       allow update: if isValidId(userId) &&
@@ -452,6 +475,19 @@ service cloud.firestore {
         incoming().updatedAt == request.time &&
         (
           isAdmin() ||
+          (
+            isOwner(userId) &&
+            isStoreAdmin() &&
+            !existing().keys().hasAny(['role']) &&
+            incoming().role == 'store_incharge' &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['role', 'updatedAt'])
+          ) ||
+          (
+            isOwner(userId) &&
+            !existing().keys().hasAny(['role']) &&
+            incoming().role == 'customer' &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['role', 'updatedAt'])
+          ) ||
           incoming().diff(existing()).affectedKeys().hasOnly([
             'name',
             'preferredCut',
@@ -530,7 +566,7 @@ service cloud.firestore {
 
     match /orders/{orderId} {
       allow get: if isValidId(orderId) && (
-        isAdmin() ||
+        isAdminOrRole() ||
         isStaff() ||
         isStoreAdminForStore(existing().storeId) ||
         (isVerifiedUser() && existing().customerUid == request.auth.uid)
@@ -570,7 +606,7 @@ service cloud.firestore {
         incoming().createdAt == existing().createdAt &&
         incoming().updatedAt == request.time &&
         (
-          isAdmin() ||
+          isAdminOrRole() ||
           (
             incoming().storeId == existing().storeId &&
             !(existing().status in ['delivered', 'cancelled']) &&
@@ -600,6 +636,7 @@ service cloud.firestore {
                   'subtotal',
                   'total',
                   'loyaltyPointsEarned',
+                  'loyaltyDiscountAmount',
                   'originalSubtotal',
                   'originalTotal',
                   'weightUpdatedAt',
@@ -623,12 +660,12 @@ service cloud.firestore {
             )
           )
         );
-      allow delete: if isValidId(orderId) && isAdmin();
+      allow delete: if isValidId(orderId) && isAdminOrRole();
     }
 
     match /subscriptions/{subId} {
       allow get: if isValidId(subId) && (
-        isAdmin() ||
+        isAdminOrRole() ||
         isStaff() ||
         isStoreAdminForStore(existing().storeId) ||
         (isVerifiedUser() && existing().customerUid == request.auth.uid)
@@ -654,7 +691,7 @@ service cloud.firestore {
         incoming().createdAt == existing().createdAt &&
         incoming().updatedAt == request.time &&
         (
-          isAdmin() ||
+          isAdminOrRole() ||
           (
             incoming().storeId == existing().storeId &&
             (isStaff() || isStoreAdminForStore(existing().storeId) || existing().customerUid == request.auth.uid) &&
@@ -666,7 +703,7 @@ service cloud.firestore {
           )
         );
       allow delete: if isValidId(subId) && (
-        isAdmin() ||
+        isAdminOrRole() ||
         (isVerifiedUser() && existing().customerUid == request.auth.uid)
       );
     }
@@ -674,20 +711,20 @@ service cloud.firestore {
     match /storeConfig/{configId} {
       allow get: if isValidId(configId);
       allow create, update: if isValidId(configId) &&
-        isAdmin() &&
+        isAdminOrRole() &&
         isValidFeatureConfig(incoming()) &&
         incoming().updatedAt == request.time;
-      allow delete: if isValidId(configId) && isAdmin();
+      allow delete: if isValidId(configId) && isAdminOrRole();
     }
 
     match /customPrices/{productId} {
       allow get: if isValidId(productId) && isSignedIn();
       allow list: if isVerifiedUser() && resource.data.basePricePerKg > 0;
       allow create, update: if isValidId(productId) &&
-        (isAdmin() || isStaff() || isStoreAdmin()) &&
+        (isAdminOrRole() || isStaff() || isStoreAdmin()) &&
         isValidPriceOverride(incoming(), productId) &&
         incoming().updatedAt == request.time;
-      allow delete: if isValidId(productId) && isAdmin();
+      allow delete: if isValidId(productId) && isAdminOrRole();
     }
 
     match /guestCustomers/{guestId} {
@@ -702,7 +739,7 @@ service cloud.firestore {
         incoming().guestId == existing().guestId &&
         incoming().createdAt == existing().createdAt &&
         incoming().updatedAt == request.time;
-      allow delete: if isValidGuestPhoneId(guestId) && isAdmin();
+      allow delete: if isValidGuestPhoneId(guestId) && isAdminOrRole();
     }
 
     match /guestCounters/{counterId} {

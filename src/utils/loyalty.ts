@@ -3,6 +3,7 @@ import { OrderRecord } from '../types';
 export const LOYALTY_EARN_RATE_PER_100 = 1; // 1 point earned per ₹100 spent
 export const LOYALTY_POINT_VALUE_INR = 1; // 1 loyalty point = ₹1 discount at checkout
 export const WELCOME_LOYALTY_POINTS = 50; // Welcome bonus points on new registration
+export const WELCOME_FRESH_WALLET_CREDIT_INR = 50; // Welcome Fresh Wallet credit for new registration / user / first order
 
 /**
  * Calculates loyalty points earned on net payable item spend (after any redeemed discount).
